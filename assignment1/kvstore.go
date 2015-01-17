@@ -27,8 +27,6 @@ type Message struct {
     // will return acknowledgement from backend and
     // any associated text
     ack chan string
-    // A vlaue, if any
-    value string
     // The actual command (Set, Get, Getm, Cas, Delete)
     // I would prefer to use an enum here, but that doesn't
     // seem to be an option
@@ -42,6 +40,7 @@ type Set struct {
     key string
     exptime int64
     noreply bool
+    value string
 }
 
 // Get the value for a key
@@ -60,6 +59,7 @@ type Cas struct {
     exptime int64
     noreply bool
     version int64
+    value string
 }
 
 // Delete a key
@@ -108,32 +108,40 @@ func newSocket(conn net.Conn, cs chan Message) {
             conn.Write([]byte(err.Error()))
             continue
         }
-        message := Message {ack, "", data}
+        noreply := false
 
+        value := ""
         // In case we are supposed to read a value of n bytes, read it
         if n != -1 {
             scanner.Scan()
-            message.value = scanner.Text()
-            if len(message.value) != n {
+            value = scanner.Text()
+            if len(value) != n {
                 conn.Write([]byte("ERR_CMD_ERR\r\n"))
                 continue                
             }
         }
+        // Handle noreply
+        switch data.(type) {
+            case Set:
+                set := data.(Set)
+                if set.noreply {
+                    noreply = true
+                }
+                set.value = value
+                data = set
+            case Cas:
+                cas := data.(Cas)
+                if cas.noreply {
+                    noreply = true
+                }
+                cas.value = value
+                data = cas
+        }
+
+        message := Message {ack, data}
         cs <- message
         // Wait for acknowledgement
         out :=  <- ack
-
-        // Handle noreply
-        switch message.data.(type) {
-            case Set:
-                if message.data.(Set).noreply {
-                    continue
-                }
-            case Cas:
-                if message.data.(Cas).noreply {
-                    continue
-                }
-        }
         conn.Write([]byte(out+"\r\n"))
     }
 }
@@ -143,14 +151,13 @@ func newSocket(conn net.Conn, cs chan Message) {
 func backend(cs chan Message) {
     // The actual keyvalue store
     store := make(map[string]Value)
-    for {
-        message :=  <- cs
+    for message := range cs {
         switch message.data.(type) {
             case Set: {
                 data := message.data.(Set)
                 version := rand.Int63()
-                value := message.value
                 exptime := data.exptime
+                value := data.value
                 store[data.key] = Value {value, exptime, version}
                 message.ack <- "OK "+strconv.FormatInt(version, 10)
             }
@@ -187,12 +194,12 @@ func backend(cs chan Message) {
             }
             case Cas: {
                 data := message.data.(Cas)
-                value := message.value
                 val, ok := store[data.key]
                 if ok {
                     if val.version == data.version {
                         version := rand.Int63()
                         exptime := data.exptime
+                        value := data.value
                         store[data.key] = Value {value, exptime, version}
                         message.ack <- "OK "+strconv.FormatInt(version, 10)
                     } else {
@@ -203,6 +210,7 @@ func backend(cs chan Message) {
                 }                
             }
             default:
+                // this should never happen
                 message.ack <- "ERR_INTERNAL"
         }
     }
@@ -237,7 +245,7 @@ func parse(inp string) (interface{}, int, error) {
             if e != nil {
                 return ret, n, err
             }
-            ret = Set {key, exptime, noreply}
+            ret = Set {key, exptime, noreply, ""}
             return ret, n, nil
         case "get":
             if len(s) != 2 {
@@ -284,7 +292,7 @@ func parse(inp string) (interface{}, int, error) {
             if e != nil {
                 return ret, n, err
             }
-            ret = Cas {key, exptime, noreply, version}
+            ret = Cas {key, exptime, noreply, version, ""}
             return ret, n, nil
         default: return nil, n, err
     }
