@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Tests for functioning of backend
+// Serial tests for functioning of backend
 func TestBackend(t *testing.T) {
 	messages := make(chan Message)
 	go backend(messages)
@@ -155,23 +155,31 @@ func TestBackend(t *testing.T) {
 	expect(t, resp, "ERR_NOT_FOUND")
 }
 
+// This tests the backend's ability to hand lots
+// of clients at once, with some racing attempts to CAS
 func TestBackendConcurrent(t *testing.T) {
-
+    done := make (chan bool)
 	messages := make(chan Message)
-	done := make(chan bool)
 	go backend(messages)
-	// Add some background noise
+	// Add some background noise. This shouldn't race, but it tests
+    // our ability to buffer and handle load
 	for i := 0; i < 5; i++ {
 		go interference(t, messages, done, "i"+strconv.Itoa(i),
 			"tomato"+strconv.Itoa(i), int64(100+i))
 	}
 
-	for i := 0; i < 5; i++ {
-		<-done
-	}
+    // Each one of these is an concurrency test
+    // which will try to race with itself
+    go concurrent(t, messages, done, "prefix1")
+    go concurrent(t, messages, done, "prefix2")
+    go concurrent(t, messages, done, "prefix3")
+
+	for i := 0; i< 9; i++ {
+        <- done
+    }
 }
 
-// An independent test to be spawned (to trigger interference)
+// An independent goroutine to be spawned (to trigger interference)
 // Just sets, swaps, and deletes a single key
 func interference(t *testing.T, messages chan Message, done chan bool, key string, value string, exptime int64) {
 	for i := 0; i < 10; i++ {
@@ -234,9 +242,54 @@ func interference(t *testing.T, messages chan Message, done chan bool, key strin
 		resp = <-ack
 		expect(t, resp, "ERR_NOT_FOUND")
 	}
-	done <- true
+    done <- true
 }
 
+// Sets a key with the given prefix, then spawns two threads competing to CAS it
+func concurrent(t *testing.T, messages chan Message, done chan bool, prefix string) {
+	key := prefix+"-concurrent"
+	exptime := int64(100)
+	value := "set"
+	ack := make(chan string)
+	message := Message{ack, Set{key: key, exptime: exptime, noreply: false, value: value}}
+	messages <- message
+	resp := <-ack
+	arr := strings.Split(resp, " ")
+	expect(t, arr[0], "OK")
+	ver, err := strconv.Atoi(arr[1])
+	if err != nil {
+		t.Error("Non-numeric version found")
+	}
+	version := int64(ver)
+    // The first one almost always wins, but inserting various fudge factors between the two
+    // leads to varying and interesting behavior
+    go concurrentInner(t, messages, done, key, version, "setby1", "setby2", "First")
+	go concurrentInner(t, messages, done, key, version, "setby2", "setby1", "Second")
+}
+
+// CAS the given key, report if successful, and check validity
+func concurrentInner(t *testing.T, messages chan Message, done chan bool, key string,
+                     version int64, value string, othervalue string, name string) {
+    ack := make(chan string)
+    exptime := int64(200)
+	message := Message{ack, Cas{key: key, exptime: exptime, noreply: false, value: value, version: version}}
+	messages <- message
+
+	resp := <-ack
+	arr := strings.Split(resp, " ")
+    if arr[0] == "OK" {
+        t.Logf("%v concurrent goroutine won", name)
+    } else {
+        value = othervalue
+    }
+    message.data = Get{key}
+    messages <- message
+    resp = <-ack
+    expect(t, resp, fmt.Sprintf("VALUE %v\r\n%v", len(value), value))
+    done <- true
+}
+
+// Useful testing function
 func expect(t *testing.T, a string, b string) {
 	if a != b {
 		t.Error(fmt.Sprintf("Expected %v, found %v", b, a))
