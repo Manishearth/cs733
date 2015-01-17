@@ -13,6 +13,60 @@ import (
 
 const PORT = ":9000"
 
+
+// A value in the key-value store
+type Value struct {
+    val string
+    exptime int64
+    version int64
+}
+
+// A generic message to be passed to the backend
+type Message struct {
+    // The "acknowledgement" channel:
+    // will return acknowledgement from backend and
+    // any associated text
+    ack chan string
+    // A vlaue, if any
+    value string
+    // The actual command (Set, Get, Getm, Cas, Delete)
+    // I would prefer to use an enum here, but that doesn't
+    // seem to be an option
+    data interface{}
+}
+
+// Concrete message types
+
+// Set a key with given expiry time
+type Set struct {
+    key string
+    exptime int64
+    noreply bool
+}
+
+// Get the value for a key
+type Get struct {
+    key string
+}
+
+// Get the metadata for a key
+type Getm struct {
+    key string
+}
+
+// Compare-and-swap a key's value iff the version matches
+type Cas struct {
+    key string
+    exptime int64
+    noreply bool
+    version int64
+}
+
+// Delete a key
+type Delete struct {
+    key string
+}
+
 func main () {
     listener, err := net.Listen("tcp", PORT)
 
@@ -154,52 +208,7 @@ func backend(cs chan Message) {
     }
 }
 
-// A value in the key-value store
-type Value struct {
-    val string
-    exptime int64
-    version int64
-}
-
-// A generic message to be passed to the backend
-type Message struct {
-    // The "acknowledgement" channel:
-    // will return acknowledgement from backend and
-    // any associated text
-    ack chan string
-    // A vlaue, if any
-    value string
-    // The actual command (Set, Get, Getm, Cas, Delete)
-    // I would prefer to use an enum here, but that doesn't
-    // seem to be an option
-    data interface{}
-}
-
-type Set struct {
-    key string
-    exptime int64
-    noreply bool
-}
-
-type Get struct {
-    key string
-}
-
-type Getm struct {
-    key string
-}
-
-type Cas struct {
-    key string
-    exptime int64
-    noreply bool
-    version int64
-}
-
-type Delete struct {
-    key string
-}
-
+// Parse the input string and turn it into a concrete message type
 func parse(inp string) (interface{}, int, error) {
     s := strings.Split(inp, " ")
     err := errors.New("ERR_CMD_ERR\r\n")
