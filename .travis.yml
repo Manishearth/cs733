@@ -1,4 +1,9 @@
 language: go
 
 script: 
-    - cd assignment1 && go test
+    - cd assignment1 && go test -v
+
+# Travis runs on 1.5 virtual cores so I don't know how well this will work
+# but it doesn't hurt to try
+env: 
+ - GOMAXPROCS=2
