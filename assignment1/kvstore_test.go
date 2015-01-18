@@ -409,6 +409,25 @@ func concurrentTCPInner(t *testing.T, done chan bool, name string, exptime int,
 	done <- true
 }
 
+// Test for expiry of keys
+func TestExpiry(t *testing.T) {
+	messages := make(chan Message)
+	go backend(messages)
+	ack := make(chan string)
+
+	// Check that the store is empty
+	message := Message{ack, Set{key: "banana", exptime: 2, noreply: false, value: "potato"}}
+	messages <- message
+	<-ack
+
+	time.Sleep(time.Duration(4) * time.Second)
+
+	message.data = Get{key: "banana"}
+	messages <- message
+	resp := <-ack
+	expect(t, resp, "ERR_NOT_FOUND")
+}
+
 // Useful testing function
 func expect(t *testing.T, a string, b string) {
 	if a != b {
