@@ -265,8 +265,7 @@ func concurrent(t *testing.T, messages chan Message, done chan bool, prefix stri
 		t.Error("Non-numeric version found")
 	}
 	version := int64(ver)
-	// The first one almost always wins, but inserting various fudge factors between the two
-	// leads to varying and interesting behavior
+	// When run with GOMAXPROCS=4, this is
 	go concurrentInner(t, messages, done, key, version, "setby1", "setby2", "First")
 	go concurrentInner(t, messages, done, key, version, "setby2", "setby1", "Second")
 }

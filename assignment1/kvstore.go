@@ -9,15 +9,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const PORT = ":9000"
 
 // A value in the key-value store
 type Value struct {
-	val     string
-	exptime int64
-	version int64
+	val      string
+	exptime  int64
+	version  int64
+	creation time.Time
 }
 
 // A generic message to be passed to the backend
@@ -64,6 +66,10 @@ type Cas struct {
 // Delete a key
 type Delete struct {
 	key string
+}
+
+// Internal message for cleaning up expired keys
+type Cleanup struct {
 }
 
 func main() {
@@ -152,7 +158,13 @@ func newSocket(conn net.Conn, cs chan Message) {
 func backend(cs chan Message) {
 	// The actual keyvalue store
 	store := make(map[string]Value)
+	// Fake ack channel for
+	fakeAck := make(chan string)
+	go cleanup(cs, fakeAck)
+	timer := makeCleanup(cs, fakeAck)
 	for message := range cs {
+		// We're under load, cancel the task to queue a cleanup
+		timer.Stop()
 		switch message.data.(type) {
 		case Set:
 			{
@@ -160,7 +172,7 @@ func backend(cs chan Message) {
 				version := rand.Int63()
 				exptime := data.exptime
 				value := data.value
-				store[data.key] = Value{value, exptime, version}
+				store[data.key] = Value{value, exptime, version, time.Now()}
 				message.ack <- "OK " + strconv.FormatInt(version, 10)
 			}
 		case Get:
@@ -206,7 +218,7 @@ func backend(cs chan Message) {
 						version := rand.Int63()
 						exptime := data.exptime
 						value := data.value
-						store[data.key] = Value{value, exptime, version}
+						store[data.key] = Value{value, exptime, version, time.Now()}
 						message.ack <- "OK " + strconv.FormatInt(version, 10)
 					} else {
 						message.ack <- "ERR_VERSION"
@@ -215,10 +227,44 @@ func backend(cs chan Message) {
 					message.ack <- "ERR_NOT_FOUND"
 				}
 			}
+		case Cleanup:
+			{
+				now := time.Now()
+				for key := range store {
+					if store[key].creation.Add(time.Duration(store[key].exptime) *
+						time.Second).Before(now) {
+						delete(store, key)
+					}
+				}
+			}
 		default:
 			// this should never happen
 			message.ack <- "ERR_INTERNAL"
 		}
+		// Restart timer to wait for the next message
+		// If there is no message in the next two seconds, a cleanup
+		// task will be queued
+		timer = makeCleanup(cs, fakeAck)
+	}
+}
+
+// Make a cleanup-queueing task
+// This will queue a cleanup task in 2 seconds if not interrupted
+// The idea is to only run cleanup if the backend has not been under much load (no messages in 2 seconds)
+// This way the possibly heavy cleanup task will be run when there is a free slot
+// giving us a very rudimentary task priority system
+func makeCleanup(cs chan Message, fakeAck chan string) *time.Timer {
+	return time.AfterFunc(time.Second*time.Duration(2), func() { cs <- Message{ack: fakeAck, data: Cleanup{}} })
+}
+
+// Always queue a cleanup task every 10 seconds
+// In case of constant load, makeCleanup will always be canceled
+// but we we still want to clean up the store occasionally
+// Once every ten seconds should not be much load
+func cleanup(cs chan Message, fakeAck chan string) {
+	for {
+		cs <- Message{ack: fakeAck, data: Cleanup{}}
+		time.Sleep(time.Second * time.Duration(10))
 	}
 }
 
