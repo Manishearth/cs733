@@ -1,0 +1,4 @@
+language: go
+
+script: 
+    - cd assignment1 && go test
