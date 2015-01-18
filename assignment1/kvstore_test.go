@@ -177,6 +177,7 @@ func TestBackendConcurrent(t *testing.T) {
 	go concurrent(t, messages, done, "prefix2")
 	go concurrent(t, messages, done, "prefix3")
 
+	// Wait for tests to finish
 	for i := 0; i < 9; i++ {
 		<-done
 	}
@@ -292,25 +293,30 @@ func concurrentInner(t *testing.T, messages chan Message, done chan bool, key st
 	done <- true
 }
 
-// Useful testing function
-func expect(t *testing.T, a string, b string) {
-	if a != b {
-		t.Error(fmt.Sprintf("Expected %v, found %v", b, a))
-	}
-}
-
+// Test the TCP interface
 func TestTCP(t *testing.T) {
 	go main()
+	// Wait for setup to happen, could take some time
 	time.Sleep(time.Microsecond * time.Duration(100))
 
 	done := make(chan bool)
+	// Simple interface checks
 	go singleTCP(t, done, "hi", "bye")
-	// Everything will just exit here, no need to close goroutines explicitly
-	for i := 0; i < 1; i++ {
+	go singleTCP(t, done, "banana", "potato")
+	go singleTCP(t, done, "watermelon", "cantaloupe")
+
+	// Concurrent CAS check
+	go concurrentTCP(t, done, "concurrent-banana", "concurrent-potato")
+	go concurrentTCP(t, done, "concurrent-hi", "concurrent-bye")
+
+	// Wait for tests to finish
+	for i := 0; i < 7; i++ {
 		<-done
 	}
+	// Everything will just exit here, no need to close goroutines from main() explicitly
 }
 
+// Simple serial check of getting and setting
 func singleTCP(t *testing.T, done chan bool, name string, value string) {
 	exptime := 300
 	conn, err := net.Dial("tcp", fmt.Sprintf("localhost%v", PORT))
@@ -318,31 +324,95 @@ func singleTCP(t *testing.T, done chan bool, name string, value string) {
 		t.Error(err.Error())
 	}
 
+	// Blank get
 	fmt.Fprintf(conn, "get %v\r\n", name)
 	scanner := bufio.NewScanner(conn)
 	scanner.Scan()
+	expect(t, scanner.Text(), "ERR_NOT_FOUND")
 
-	expect(t, "ERR_NOT_FOUND", scanner.Text())
+	// Set then get
 	fmt.Fprintf(conn, "set %v %v %v\r\n%v\r\n", name, exptime, len(value), value)
 	scanner.Scan()
 	resp := scanner.Text()
 	arr := strings.Split(resp, " ")
-	expect(t, "OK", arr[0])
+	expect(t, arr[0], "OK")
 	ver, err := strconv.Atoi(arr[1])
 	if err != nil {
 		t.Error("Non-numeric version found")
 	}
 	version := int64(ver)
-
 	fmt.Fprintf(conn, "get %v\r\n", name)
 	scanner.Scan()
-	expect(t, fmt.Sprintf("VALUE %v", len(value)), scanner.Text())
+	expect(t, scanner.Text(), fmt.Sprintf("VALUE %v", len(value)))
 	scanner.Scan()
 	expect(t, value, scanner.Text())
 	fmt.Fprintf(conn, "getm %v\r\n", name)
 	scanner.Scan()
-	expect(t, fmt.Sprintf("VALUE %v %v %v", version, exptime, len(value)), scanner.Text())
+	expect(t, scanner.Text(), fmt.Sprintf("VALUE %v %v %v", version, exptime, len(value)))
 	scanner.Scan()
-	expect(t, value, scanner.Text())
+	expect(t, scanner.Text(), value)
+
+	// Test noreply (just test that the next reply is correct since testing for a blocking scan
+	// is harder)
+	fmt.Fprintf(conn, "set %v %v %v noreply\r\n%v\r\n", name+"-norep", exptime, len(value), value)
+	fmt.Fprintf(conn, "get %v\r\n", name)
+	scanner.Scan()
+	expect(t, scanner.Text(), fmt.Sprintf("VALUE %v", len(value)))
 	done <- true
+}
+
+// Sets up to CASes to race, similar to concurrent() but via TCP
+func concurrentTCP(t *testing.T, done chan bool, name string, value string) {
+	exptime := 300
+	conn, err := net.Dial("tcp", fmt.Sprintf("localhost%v", PORT))
+	if err != nil {
+		t.Error(err.Error())
+	}
+
+	fmt.Fprintf(conn, "set %v %v %v\r\n%v\r\n", name, exptime, len(value), value)
+	scanner := bufio.NewScanner(conn)
+	scanner.Scan()
+	resp := scanner.Text()
+	arr := strings.Split(resp, " ")
+	expect(t, arr[0], "OK")
+	ver, err := strconv.Atoi(arr[1])
+	if err != nil {
+		t.Error("Non-numeric version found")
+	}
+	version := int64(ver)
+	go concurrentTCPInner(t, done, name, exptime, version, "setby1", "setby2", "First")
+	go concurrentTCPInner(t, done, name, exptime, version, "setby2", "setby1", "Second")
+}
+
+func concurrentTCPInner(t *testing.T, done chan bool, name string, exptime int,
+	version int64, newval string, otherval string, testname string) {
+	conn, err := net.Dial("tcp", fmt.Sprintf("localhost%v", PORT))
+	value := newval
+	if err != nil {
+		t.Error(err.Error())
+	}
+	fmt.Fprintf(conn, "cas %v %v %v %v\r\n%v\r\n", name, exptime, version, len(value), value)
+	scanner := bufio.NewScanner(conn)
+	scanner.Scan()
+	resp := scanner.Text()
+	arr := strings.Split(resp, " ")
+	if arr[0] == "OK" {
+		t.Logf("%v goroutine won", testname)
+	} else {
+		expect(t, resp, "ERR_VERSION")
+		value = otherval
+	}
+	fmt.Fprintf(conn, "get %v\r\n", name)
+	scanner.Scan()
+	expect(t, scanner.Text(), fmt.Sprintf("VALUE %v", len(value)))
+	scanner.Scan()
+	expect(t, scanner.Text(), value)
+	done <- true
+}
+
+// Useful testing function
+func expect(t *testing.T, a string, b string) {
+	if a != b {
+		t.Error(fmt.Sprintf("Expected %v, found %v", b, a))
+	}
 }
