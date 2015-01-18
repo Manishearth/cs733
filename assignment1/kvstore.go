@@ -141,9 +141,9 @@ func newSocket(conn net.Conn, cs chan Message) {
 		cs <- message
 		// Wait for acknowledgement
 		out := <-ack
-        if !noreply {
-            conn.Write([]byte(out + "\r\n"))            
-        }
+		if !noreply {
+			conn.Write([]byte(out + "\r\n"))
+		}
 	}
 }
 
