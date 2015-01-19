@@ -16,9 +16,10 @@ const PORT = ":9000"
 
 // A value in the key-value store
 type Value struct {
-	val      string
-	exptime  int64
-	version  int64
+	val     string
+	exptime int64
+	version int64
+	// Time of creation; for checking expiry
 	creation time.Time
 }
 
@@ -158,9 +159,13 @@ func newSocket(conn net.Conn, cs chan Message) {
 func backend(cs chan Message) {
 	// The actual keyvalue store
 	store := make(map[string]Value)
-	// Fake ack channel for
+	// Fake ack channel for including in messages for
+	// the cleanup task
 	fakeAck := make(chan string)
+	// Schedule the every-ten-seconds cleanup
 	go cleanup(cs, fakeAck)
+	// Spawn a task to queue a cleanup in a delayed fashion
+	// To be canceled if under load
 	timer := makeCleanup(cs, fakeAck)
 	for message := range cs {
 		// We're under load, cancel the task to queue a cleanup
