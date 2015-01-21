@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -74,28 +74,30 @@ type Cleanup struct {
 }
 
 func main() {
-	listener, err := net.Listen("tcp", PORT)
-
-	if err != nil {
-		fmt.Printf("Error setting up listener: %v", err.Error())
-		os.Exit(1)
-	}
-
-	// This channel will queue messages from sockets
-	messages := make(chan Message)
-
-	// Start backend goroutine
-	go backend(messages)
-
 	for {
-		conn, err := listener.Accept()
+		listener, err := net.Listen("tcp", PORT)
+
 		if err != nil {
-			fmt.Printf("Error starting connection: %v", err.Error())
+			log.Printf("Error setting up listener: %v", err.Error())
 			continue
 		}
-		defer conn.Close()
-		// Spawn a socket goroutine
-		go newSocket(conn, messages)
+
+		// This channel will queue messages from sockets
+		messages := make(chan Message)
+
+		// Start backend goroutine
+		go backend(messages)
+
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Printf("Error starting connection: %v", err.Error())
+				continue
+			}
+			defer conn.Close()
+			// Spawn a socket goroutine
+			go newSocket(conn, messages)
+		}
 	}
 }
 
