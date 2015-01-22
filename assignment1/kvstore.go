@@ -83,7 +83,7 @@ func main() {
 		}
 
 		// This channel will queue messages from sockets
-		messages := make(chan Message)
+		messages := make(chan Message, 1000)
 
 		// Start backend goroutine
 		go backend(messages)
@@ -108,7 +108,7 @@ func newSocket(conn net.Conn, cs chan Message) {
 	// scanner.Scan() automatically breaks at \r\n for us
 	for scanner.Scan() {
 		// Create acknowledgement channel
-		ack := make(chan string)
+		ack := make(chan string, 2)
 
 		// Parse input
 		data, n, err := parse(scanner.Text())
@@ -163,7 +163,7 @@ func backend(cs chan Message) {
 	store := make(map[string]Value)
 	// Fake ack channel for including in messages for
 	// the cleanup task
-	fakeAck := make(chan string)
+	fakeAck := make(chan string, 2)
 	// Schedule the every-ten-seconds cleanup
 	go cleanup(cs, fakeAck)
 	// Spawn a task to queue a cleanup in a delayed fashion

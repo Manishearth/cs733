@@ -12,9 +12,9 @@ import (
 
 // Serial tests for functioning of backend
 func TestBackend(t *testing.T) {
-	messages := make(chan Message)
+	messages := make(chan Message, 100)
 	go backend(messages)
-	ack := make(chan string)
+	ack := make(chan string, 2)
 
 	// Check that the store is empty
 	message := Message{ack, Get{"banana"}}
@@ -161,8 +161,8 @@ func TestBackend(t *testing.T) {
 // This tests the backend's ability to hand lots
 // of clients at once, with some racing attempts to CAS
 func TestBackendConcurrent(t *testing.T) {
-	done := make(chan bool)
-	messages := make(chan Message)
+	done := make(chan bool, 10)
+	messages := make(chan Message, 100)
 	go backend(messages)
 	// Add some background noise. This shouldn't race, but it tests
 	// our ability to buffer and handle load
@@ -187,7 +187,7 @@ func TestBackendConcurrent(t *testing.T) {
 // Just sets, swaps, and deletes a single key
 func interference(t *testing.T, messages chan Message, done chan bool, key string, value string, exptime int64) {
 	for i := 0; i < 10; i++ {
-		ack := make(chan string)
+		ack := make(chan string, 2)
 		message := Message{ack, Set{key: key, exptime: exptime, noreply: false, value: value}}
 		messages <- message
 		resp := <-ack
@@ -254,7 +254,7 @@ func concurrent(t *testing.T, messages chan Message, done chan bool, prefix stri
 	key := prefix + "-concurrent"
 	exptime := int64(100)
 	value := "set"
-	ack := make(chan string)
+	ack := make(chan string, 2)
 	message := Message{ack, Set{key: key, exptime: exptime, noreply: false, value: value}}
 	messages <- message
 	resp := <-ack
@@ -273,7 +273,7 @@ func concurrent(t *testing.T, messages chan Message, done chan bool, prefix stri
 // CAS the given key, report if successful, and check validity
 func concurrentInner(t *testing.T, messages chan Message, done chan bool, key string,
 	version int64, value string, othervalue string, name string) {
-	ack := make(chan string)
+	ack := make(chan string, 2)
 	exptime := int64(200)
 	message := Message{ack, Cas{key: key, exptime: exptime, noreply: false, value: value, version: version}}
 	messages <- message
@@ -298,7 +298,7 @@ func TestTCP(t *testing.T) {
 	// Wait for setup to happen, could take some time
 	time.Sleep(time.Microsecond * time.Duration(100))
 
-	done := make(chan bool)
+	done := make(chan bool, 2)
 	// Simple interface checks
 	go singleTCP(t, done, "hi", "bye")
 	go singleTCP(t, done, "banana", "potato")
@@ -411,9 +411,9 @@ func concurrentTCPInner(t *testing.T, done chan bool, name string, exptime int,
 
 // Test for expiry of keys
 func TestExpiry(t *testing.T) {
-	messages := make(chan Message)
+	messages := make(chan Message, 100)
 	go backend(messages)
-	ack := make(chan string)
+	ack := make(chan string, 2)
 
 	// Check that the store is empty
 	message := Message{ack, Set{key: "banana", exptime: 2, noreply: false, value: "potato"}}
