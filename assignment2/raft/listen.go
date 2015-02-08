@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"fmt"
 )
 
 // A value in the key-value store
@@ -18,46 +19,42 @@ type Value struct {
 
 // A generic message to be passed to the backend
 type Message struct {
-	// The "acknowledgement" channel:
-	// will return acknowledgement from backend and
-	// any associated text
-	ack chan string
 	// The actual command (Set, Get, Getm, Cas, Delete)
 	// I would prefer to use an enum here, but that doesn't
 	// seem to be an option
-	data interface{}
+	Data interface{}
 }
 
 // Concrete message types
 
 // Set a key with given expiry time
 type Set struct {
-	key     string
-	exptime int64
-	value   []byte
+	Key     string
+	Exptime int64
+	Value   []byte
 }
 
 // Get the value for a key
 type Get struct {
-	key string
+	Key string
 }
 
 // Get the metadata for a key
 type Getm struct {
-	key string
+	Key string
 }
 
 // Compare-and-swap a key's value iff the version matches
 type Cas struct {
-	key     string
-	exptime int64
-	version int64
-	value   []byte
+	Key     string
+	Exptime int64
+	Version int64
+	Value   []byte
 }
 
 // Delete a key
 type Delete struct {
-	key string
+	Key string
 }
 
 // Parse the input string and turn it into a concrete message type
@@ -68,7 +65,7 @@ func parse(inp string) (interface{}, int, error) {
 	var ret interface{} = nil
 	switch s[0] {
 	case "set":
-		if len(s) != 2 {
+		if len(s) != 4 {
 			return ret, n, err
 		}
 		key := s[1]
@@ -127,7 +124,7 @@ func parse(inp string) (interface{}, int, error) {
 	}
 }
 
-func (t *Raft) listen() {
+func (t *Raft) Listen() {
 	for {
 		listener, err := net.Listen("tcp", ":"+strconv.Itoa(t.Config.Servers[t.SelfId].ClientPort))
 
@@ -137,10 +134,10 @@ func (t *Raft) listen() {
 		}
 
 		// This channel will queue messages from sockets
-		messages := make(chan Message, 1000)
+		messages := make(chan IndexedAck, 1000)
 
 		// Start backend goroutine
-		go backend(messages)
+		go t.Backend(messages)
 
 		for {
 			conn, err := listener.Accept()
@@ -150,14 +147,14 @@ func (t *Raft) listen() {
 			}
 			defer conn.Close()
 			// Spawn a socket goroutine
-			go newSocket(conn, messages)
+			go t.newSocket(conn, messages)
 		}
 	}
 }
 
 // Goroutine that handles interaction with a single connection
 // It can send structured messages via the Message channel
-func newSocket(conn net.Conn, cs chan Message) {
+func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 	scanner := bufio.NewScanner(conn)
 	// scanner.Scan() automatically breaks at \r\n for us
 	for scanner.Scan() {
@@ -192,22 +189,27 @@ func newSocket(conn net.Conn, cs chan Message) {
 		switch data.(type) {
 		case Set:
 			set := data.(Set)
-			set.value = value
+			set.Value = value
 			data = set
 		case Cas:
 			cas := data.(Cas)
-			cas.value = value
+			cas.Value = value
 			data = cas
 		}
 
-		message := Message{ack, data}
-		cs <- message
+		message := Message{data}
+		log, err := t.Append(message)
+		if err != nil {
+			server := t.Config.Servers[0]
+			conn.Write([]byte(fmt.Sprintf("ERR_REDIRECT %v:%v", server.Hostname, server.ClientPort)))
+			return
+		}
+		cs<- IndexedAck {
+			lsn: log.Lsn,
+			ack: ack,
+		}
 		// Wait for acknowledgement
 		out := <-ack
 		conn.Write([]byte(out))
 	}
-}
-
-func backend(cs chan Message) {
-
 }
