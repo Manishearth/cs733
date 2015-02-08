@@ -1,6 +1,8 @@
 package raft
 
-import ("strconv")
+import (
+	"strconv"
+)
 
 type Lsn uint64      // Log sequence number, unique for all time.
 type ErrRedirect int // See Log.Append. Implements Error interface.
@@ -23,21 +25,22 @@ type SharedLog interface {
 // --------------------------------------
 // Raft setup
 type ServerConfig struct {
-	Id         int // Id of server. Must be unique
-	Hostname   int    // string name or ip of host
+	Id         int    // Id of server. Must be unique
+	Hostname   string // string name or ip of host
 	ClientPort int    // int port at which server listens to client messages.
-	LogPort    int // tcp port for inter-replica protocol messages.
+	LogPort    int    // tcp port for inter-replica protocol messages.
 }
+
 type ClusterConfig struct {
-	Path string // Directory for persistent log
+	Path    string         // Directory for persistent log
 	Servers []ServerConfig // All servers in this cluster
 }
 
 // Raft implements the SharedLog interface.
 type Raft struct {
-	selfId int
-	config ClusterConfig
-	commitCh chan LogEntry
+	SelfId   int
+	Config   ClusterConfig
+	CommitCh chan LogEntry
 }
 
 // Creates a raft object. This implements the SharedLog interface.
@@ -45,10 +48,20 @@ type Raft struct {
 // When the process starts, the local disk log is read and all committed
 // entries are recovered and replayed
 func NewRaft(config *ClusterConfig, thisServerId int, commitCh chan LogEntry) (*Raft, error) {
-	return nil, nil
+	return &Raft{
+		SelfId:   thisServerId,
+		Config:   *config,
+		CommitCh: commitCh,
+	}, nil
 }
 
 // ErrRedirect as an Error object
 func (e ErrRedirect) Error() string {
 	return "Redirect to server " + strconv.Itoa(10)
+}
+
+func (t *ClusterConfig) GetSetup(args *int, reply *ClusterConfig) error {
+	reply.Path = t.Path
+	reply.Servers = t.Servers
+	return nil
 }
