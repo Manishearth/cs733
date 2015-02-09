@@ -3,8 +3,8 @@ language: go
 script: 
     - cd assignment1 && go test -v
     - go install github.com/Manishearth/cs733/assignment2/main && go install github.com/Manishearth/cs733/assignment2/kvstore && go install github.com/Manishearth/cs733/assignment2/standalone_tester
-    - cp assignment2/config.json .
-    -  ~/gopath/bin/main & (sleep 2 && ~/gopath/bin/standalone_tester)
+    - cp ~/gopath/src/github.com/Manishearth/cs733/assignment2/standalone_tester/config.json .
+    -  ~/gopath/bin/main & (sleep 10 && ~/gopath/bin/standalone_tester)
 
 # Travis runs on 1.5 virtual cores so I don't know how well this will work
 # but it doesn't hurt to try
