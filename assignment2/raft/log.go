@@ -1,31 +1,29 @@
 package raft
 
 import (
-	"strconv"
-	"math/rand"
-	"sync"
 	"fmt"
+	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/rpc"
-	"log"
+	"strconv"
+	"sync"
 )
 
 // This file contains most of the code for the Raft interface
 // and SharedLog
 
-
 type Lsn uint64      // Log sequence number, unique for all time.
 type ErrRedirect int // See Log.Append. Implements Error interface.
-
 
 // I have changed the API here so
 // that I can use typed messages
 type LogEntry struct {
-	Lsn Lsn
-	Data Message
+	Lsn       Lsn
+	Data      Message
 	Committed bool
-	votes int
+	votes     int
 }
 
 type SharedLog interface {
@@ -53,12 +51,12 @@ type ClusterConfig struct {
 
 // Raft implements the SharedLog interface.
 type Raft struct {
-	SelfId   int
-	Config   ClusterConfig
-	CommitCh chan LogEntry
-	lock sync.Mutex
-	log []LogEntry // Ordered set of log entries
-	commitIndex int // Redundancy to avoid searching
+	SelfId      int
+	Config      ClusterConfig
+	CommitCh    chan LogEntry
+	lock        sync.Mutex
+	log         []LogEntry // Ordered set of log entries
+	commitIndex int        // Redundancy to avoid searching
 }
 
 // Creates a raft object. This implements the SharedLog interface.
@@ -67,11 +65,11 @@ type Raft struct {
 // entries are recovered and replayed
 func NewRaft(config *ClusterConfig, thisServerId int, commitCh chan LogEntry) (*Raft, error) {
 	r := Raft{
-		SelfId:   thisServerId,
-		Config:   *config,
-		CommitCh: commitCh,
-		lock: sync.Mutex{},
-		log: *new([]LogEntry),
+		SelfId:      thisServerId,
+		Config:      *config,
+		CommitCh:    commitCh,
+		lock:        sync.Mutex{},
+		log:         *new([]LogEntry),
 		commitIndex: 0,
 	}
 	if thisServerId == 0 {
@@ -98,12 +96,12 @@ func (t *Raft) Append(data Message) (*LogEntry, error) {
 	if t.SelfId != 0 {
 		return nil, ErrRedirect(t.Config.Servers[0].ClientPort)
 	}
-	logEntry := LogEntry {
+	logEntry := LogEntry{
 		// Effectively a uuid
-		Lsn: Lsn(rand.Int63()),
-		Data: data,
+		Lsn:       Lsn(rand.Int63()),
+		Data:      data,
 		Committed: false,
-		votes: 0,
+		votes:     0,
 	}
 	go t.initAppend(logEntry)
 	return &logEntry, nil
@@ -116,7 +114,7 @@ type AppendEntriesRPCArg struct {
 }
 
 type AppendEntriesRPCRet struct {
-	Ack bool
+	Ack          bool
 	CurrentIndex int
 }
 
@@ -137,14 +135,14 @@ func (t *Raft) heartbeat() {
 		t.lock.Lock()
 		l := len(t.log)
 		t.lock.Unlock()
-		for i:=1; i<len(t.Config.Servers); i++ {
+		for i := 1; i < len(t.Config.Servers); i++ {
 			if followerStatus[i] == l {
 				// Up to date
 				continue
 			}
 
 			var ret AppendEntriesRPCRet
-			args := AppendEntriesRPCArg {
+			args := AppendEntriesRPCArg{
 				Index: followerStatus[i],
 				Entry: t.log[followerStatus[i]],
 			}
@@ -170,12 +168,12 @@ func (t *Raft) heartbeat() {
 					}
 				}
 			}
-			
+
 		}
-		
+
 		for i := t.commitIndex; i < l; i++ {
 			if t.log[i].votes < 2 {
-				break;
+				break
 			}
 			t.log[i].Committed = true
 			t.commitIndex++
@@ -183,7 +181,7 @@ func (t *Raft) heartbeat() {
 		}
 
 		// Check commits
-		for i:=1; i<len(t.Config.Servers); i++ {
+		for i := 1; i < len(t.Config.Servers); i++ {
 			if commitStatus[i] == l {
 				// Up to date
 				continue
@@ -200,16 +198,16 @@ func (t *Raft) heartbeat() {
 				continue
 			}
 			var ret AppendEntriesRPCRet
-			args := AppendEntriesRPCArg {
+			args := AppendEntriesRPCArg{
 				Index: commitStatus[i],
 				Entry: t.log[commitStatus[i]],
 			}
 			err = client.Call("RaftRPC.AppendEntriesRPC", &args, &ret)
 			if ret.Ack == true {
 				commitStatus[i] = commitStatus[i] + 1
-			}			
-			
-		}		
+			}
+
+		}
 	}
 }
 
@@ -224,25 +222,25 @@ func (t *Raft) appendListener() {
 }
 
 func (t1 *RaftRPC) AppendEntriesRPC(args *AppendEntriesRPCArg, ret *AppendEntriesRPCRet) error {
-	t:= (*Raft)(t1)
+	t := (*Raft)(t1)
 	if args.Entry.Committed && args.Index < len(t.log) {
 		ret.Ack = true
 		t.lock.Lock()
 		// We may have missed some commits
 		// Just fill them in, since currently if the leader
 		// says that it is committed, it is committed
-		for i := t.commitIndex+1; i<= args.Index; i++ {
+		for i := t.commitIndex + 1; i <= args.Index; i++ {
 			t.log[i].Committed = true
 		}
 		t.commitIndex = args.Index
-		t.lock.Unlock()		
+		t.lock.Unlock()
 	} else if args.Index == len(t.log) {
 		// Simple append
 		t.lock.Lock()
 		t.log = append(t.log, args.Entry)
 		t.lock.Unlock()
 		ret.Ack = true
-		ret.CurrentIndex = args.Index+1
+		ret.CurrentIndex = args.Index + 1
 	} else {
 		// Server isn't on the same page as we are
 		// Ask it to send something we need

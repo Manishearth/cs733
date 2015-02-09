@@ -3,11 +3,11 @@ package raft
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
 	"strings"
-	"fmt"
 )
 
 // This file contains most of the code on the "listening" side of the system
@@ -40,7 +40,6 @@ func (t *Raft) Listen() {
 		}
 	}
 }
-
 
 // Parse the input string and turn it into a concrete message type
 func parse(inp string) (interface{}, int, error) {
@@ -115,8 +114,8 @@ func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 	// scanner.Scan() automatically breaks at \r\n for us
 	for {
 		// Create acknowledgement channel
-		ack := make(chan string, 2)
-		text,err := ReadString(reader)
+		ack := make(chan []byte, 2)
+		text, err := ReadString(reader)
 		if err != nil {
 			conn.Write([]byte("ERR_CMD_ERR\r\n"))
 			continue
@@ -134,7 +133,7 @@ func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 			buf, err := ReadBytes(reader, n)
 			if err != nil {
 				conn.Write([]byte("ERR_CMD_ERR\r\n"))
-				continue				
+				continue
 			}
 			value = buf
 		}
@@ -157,13 +156,13 @@ func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 			conn.Write([]byte(fmt.Sprintf("ERR_REDIRECT %v:%v\r\n", server.Hostname, server.ClientPort)))
 			return
 		}
-		cs<- IndexedAck {
+		cs <- IndexedAck{
 			lsn: log.Lsn,
 			ack: ack,
 		}
 		// Wait for acknowledgement
 		out := <-ack
-		conn.Write([]byte(out+"\r\n"))
+		conn.Write(append(out, '\r', '\n'))
 	}
 }
 
@@ -181,7 +180,7 @@ func ReadString(r *bufio.Reader) (string, error) {
 			break
 		}
 		if by == '\n' {
-			return string(buf),nil
+			return string(buf), nil
 		}
 		buf = append(buf, by)
 	}
@@ -191,7 +190,7 @@ func ReadString(r *bufio.Reader) (string, error) {
 			continue
 		}
 		if by == '\n' {
-			return string(buf),nil
+			return string(buf), nil
 		} else {
 			return string(buf), errors.New("ERR_CMD_ERR\r\n")
 		}
@@ -221,7 +220,7 @@ func ReadBytes(r *bufio.Reader, n int) ([]byte, error) {
 			break
 		}
 		if by == '\n' {
-			return buf,nil
+			return buf, nil
 		}
 
 	}
@@ -231,7 +230,7 @@ func ReadBytes(r *bufio.Reader, n int) ([]byte, error) {
 			continue
 		}
 		if by == '\n' {
-			return buf,nil
+			return buf, nil
 		}
 	}
 	return buf, errors.New("ERR_CMD_ERR\r\n")
