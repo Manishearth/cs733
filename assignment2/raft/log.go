@@ -103,6 +103,7 @@ func (t *Raft) Append(data Message) (*LogEntry, error) {
 		Committed: false,
 		votes:     0,
 	}
+	// Goroutine because this might block
 	go t.initAppend(logEntry)
 	return &logEntry, nil
 }
@@ -135,6 +136,7 @@ func (t *Raft) heartbeat() {
 		t.lock.Lock()
 		l := len(t.log)
 		t.lock.Unlock()
+		// First, lets update some followers with uncommitted entries
 		for i := 1; i < len(t.Config.Servers); i++ {
 			if followerStatus[i] == l {
 				// Up to date
@@ -171,6 +173,8 @@ func (t *Raft) heartbeat() {
 
 		}
 
+		// Mark any newly voted entries as committed,
+		// in order
 		for i := t.commitIndex; i < l; i++ {
 			if t.log[i].votes < 2 {
 				break
@@ -180,7 +184,7 @@ func (t *Raft) heartbeat() {
 			t.CommitCh <- t.log[i]
 		}
 
-		// Check commits
+		// Now propagate commits to the followers
 		for i := 1; i < len(t.Config.Servers); i++ {
 			if commitStatus[i] == l {
 				// Up to date
@@ -211,6 +215,7 @@ func (t *Raft) heartbeat() {
 	}
 }
 
+// Simple RPC handler for follower servers
 func (t *Raft) appendListener() {
 	rpc.Register((*RaftRPC)(t))
 	rpc.HandleHTTP()
@@ -221,6 +226,8 @@ func (t *Raft) appendListener() {
 	http.Serve(l, nil)
 }
 
+// RPC for AppendEntries, served by follower. Handles both acceptance of new entries and
+// "baking in" of committed ones
 func (t1 *RaftRPC) AppendEntriesRPC(args *AppendEntriesRPCArg, ret *AppendEntriesRPCRet) error {
 	t := (*Raft)(t1)
 	if args.Entry.Committed && args.Index < len(t.log) {

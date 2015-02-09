@@ -162,7 +162,10 @@ func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 		}
 		// Wait for acknowledgement
 		out := <-ack
-		conn.Write(append(out, '\r', '\n'))
+		_, e := conn.Write(append(out, '\r', '\n'))
+		if e != nil {
+			return
+		}
 	}
 }
 
