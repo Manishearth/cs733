@@ -9,29 +9,29 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"encoding/json"
+	"io/ioutil"
+	"fmt"
 )
 
 const MAINPORT = ":8999"
 const NUMSERVER = 5
 
 func main() {
-	var servers [NUMSERVER]raft.ServerConfig
-	for i := 0; i < NUMSERVER; i++ {
-		servers[i] = raft.ServerConfig{
-			Id:         i,
-			Hostname:   "localhost",
-			ClientPort: 8000 + i,
-			LogPort:    9000 + i,
-		}
+	file, err := ioutil.ReadFile("./config.json")
+	if err != nil {
+		fmt.Printf("Could not find config file, please place config.json in working directory")
 	}
-	cluster := raft.ClusterConfig{
-		Path:    "/tmp/out",
-		Servers: servers[:],
+	var cluster raft.ClusterConfig
+	err = json.Unmarshal(file, &cluster)
+	if err != nil {
+		fmt.Printf("%v", err.Error())
 	}
 
 	// Configuration sync RPC
 	// We do this to initialize the followers
 	// with the config
+	// They do not load from the same json for debugging purposes
 	rpc.Register(&cluster)
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", MAINPORT)
@@ -46,8 +46,7 @@ func main() {
 		cmd.Start()
 	}
 
-	// Sadly I haven't figured out how to make the http server stop serving after five counts,
-	// so this process must block indefinitely
+	// Block indefinitely for being able to get debugging output
 	cs := make(chan bool)
 	<-cs
 }

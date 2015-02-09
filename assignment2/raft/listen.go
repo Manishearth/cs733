@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"fmt"
+	"io"
 )
 
 // A value in the key-value store
@@ -171,21 +172,15 @@ func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 		value := make([]byte, 0)
 		// In case we are supposed to read a value of n bytes, read it
 		if n != -1 {
-			buf := make([]byte, n)
-			_, err = conn.Read(buf)
+			buf := make([]byte, n+2)
+			_, err = io.ReadFull(conn,buf)
 			if err != nil {
 				conn.Write([]byte("ERR_CMD_ERR\r\n"))
 				continue
 			}
-			// Check if there was some data left
-			scanner.Scan()
-			v := scanner.Text()
-			if len(v) != 0 {
-				conn.Write([]byte("ERR_CMD_ERR\r\n"))
-				continue
-			}
-			value = buf
+			value = buf[0:n]
 		}
+
 		switch data.(type) {
 		case Set:
 			set := data.(Set)
@@ -210,6 +205,6 @@ func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 		}
 		// Wait for acknowledgement
 		out := <-ack
-		conn.Write([]byte(out))
+		conn.Write([]byte(out+"\r\n"))
 	}
 }

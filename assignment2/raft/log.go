@@ -151,13 +151,11 @@ func (t *Raft) heartbeat() {
 				continue
 			}
 			err = client.Call("RaftRPC.AppendEntriesRPC", &args, &ret)
-			fmt.Printf("RET %v\r\n", err.Error())
 			defer client.Close()
 			if ret.Ack == true {
 				t.log[followerStatus[i]].votes++
 				followerStatus[i] = followerStatus[i] + 1
 			} else {
-				fmt.Printf("V %v\r\n", t.log[followerStatus[i]].votes)
 				if followerStatus[i] >= ret.CurrentIndex {
 					followerStatus[i] = ret.CurrentIndex
 				} else {
@@ -223,7 +221,6 @@ func (t *Raft) appendListener() {
 
 func (t1 *RaftRPC) AppendEntriesRPC(args *AppendEntriesRPCArg, ret *AppendEntriesRPCRet) error {
 	t:= (*Raft)(t1)
-	fmt.Printf("rpc %v, %v", args.Index, t.SelfId)
 	if args.Entry.Committed && args.Index < len(t.log) {
 		ret.Ack = true
 		t.lock.Lock()

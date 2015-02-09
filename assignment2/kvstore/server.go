@@ -10,8 +10,12 @@ import (
 )
 
 func main() {
+	// For the RPC to work
 	gob.Register(raft.Message{})
 	gob.Register(raft.Set{})
+	gob.Register(raft.Get{})
+	gob.Register(raft.Cas{})
+	gob.Register(raft.Getm{})
 	// Fetch cluster config
 	id, _ := strconv.Atoi(os.Args[1])
 	port := os.Args[2]
