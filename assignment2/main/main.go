@@ -15,7 +15,6 @@ import (
 )
 
 const MAINPORT = ":8999"
-const NUMSERVER = 5
 
 func main() {
 	file, err := ioutil.ReadFile("./config.json")
@@ -39,7 +38,7 @@ func main() {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
-	for i := 0; i < NUMSERVER; i++ {
+	for i := 0; i < len(cluster.Servers); i++ {
 		cmd := exec.Command(os.Getenv("GOPATH")+"/bin/kvstore", strconv.Itoa(i), MAINPORT)
 		cmd.Stderr = os.Stderr
 		cmd.Stdout = os.Stdout

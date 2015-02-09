@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"fmt"
-	"io"
 )
 
 // A value in the key-value store
@@ -100,7 +99,7 @@ func parse(inp string) (interface{}, int, error) {
 		ret = Delete{s[1]}
 		return ret, n, nil
 	case "cas":
-		if len(s) != 6 {
+		if len(s) != 5 {
 			return ret, n, err
 		}
 		key := s[1]
@@ -153,17 +152,87 @@ func (t *Raft) Listen() {
 	}
 }
 
+func ReadString(r *bufio.Reader) (string, error) {
+	buf := make([]byte, 0)
+	for {
+		by, err := r.ReadByte()
+		if err != nil {
+			continue
+		}
+		if by == byte('\r') {
+			break
+		}
+		if by == '\n' {
+			return string(buf),nil
+		}
+		buf = append(buf, by)
+	}
+	for {
+		by, err := r.ReadByte()
+		if err != nil {
+			continue
+		}
+		if by == '\n' {
+			return string(buf),nil
+		} else {
+			return string(buf), errors.New("ERR_CMD_ERR\r\n")
+		}
+	}
+
+}
+func ReadBytes(r *bufio.Reader, n int) ([]byte, error) {
+	buf := make([]byte, 0)
+	i := 0
+	for {
+		by, err := r.ReadByte()
+		if err != nil {
+			continue
+		}
+		buf = append(buf, by)
+		i++
+		if i == n {
+			break
+		}
+	}
+	for {
+		by, err := r.ReadByte()
+		if err != nil {
+			continue
+		}
+		if by == byte('\r') {
+			break
+		}
+		if by == '\n' {
+			return buf,nil
+		}
+
+	}
+	for {
+		by, err := r.ReadByte()
+		if err != nil {
+			continue
+		}
+		if by == '\n' {
+			return buf,nil
+		}
+	}
+	return buf, errors.New("ERR_CMD_ERR\r\n")
+}
 // Goroutine that handles interaction with a single connection
 // It can send structured messages via the Message channel
 func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
-	scanner := bufio.NewScanner(conn)
+	reader := bufio.NewReader(conn)
 	// scanner.Scan() automatically breaks at \r\n for us
-	for scanner.Scan() {
+	for {
 		// Create acknowledgement channel
 		ack := make(chan string, 2)
-
+		text,err := ReadString(reader)
+		if err != nil {
+			conn.Write([]byte("ERR_CMD_ERR\r\n"))
+			continue
+		}
 		// Parse input
-		data, n, err := parse(scanner.Text())
+		data, n, err := parse(text)
 		if err != nil {
 			conn.Write([]byte(err.Error()))
 			continue
@@ -172,13 +241,12 @@ func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 		value := make([]byte, 0)
 		// In case we are supposed to read a value of n bytes, read it
 		if n != -1 {
-			buf := make([]byte, n+2)
-			_, err = io.ReadFull(conn,buf)
+			buf, err := ReadBytes(reader, n)
 			if err != nil {
 				conn.Write([]byte("ERR_CMD_ERR\r\n"))
-				continue
+				continue				
 			}
-			value = buf[0:n]
+			value = buf
 		}
 
 		switch data.(type) {
@@ -196,7 +264,7 @@ func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
 		log, err := t.Append(message)
 		if err != nil {
 			server := t.Config.Servers[0]
-			conn.Write([]byte(fmt.Sprintf("ERR_REDIRECT %v:%v", server.Hostname, server.ClientPort)))
+			conn.Write([]byte(fmt.Sprintf("ERR_REDIRECT %v:%v\r\n", server.Hostname, server.ClientPort)))
 			return
 		}
 		cs<- IndexedAck {
