@@ -51,3 +51,19 @@ Now, you may talk to the first server via TCP. The protocol is as follows:
 
 
 Internally, these are sent to a log replication mechanism based off of Raft. When the log entry is "committed", then a response will be received
+
+
+###Code structure
+
+The project is split into the following components:
+
+ - `raft`: This contains the implementation of the Raft protocol, as well as the code for most of the peripherals. This could have been split fiuther, but the ability to define methods on a class from anywhere within the package has made the code more centralized around the `Raft` object and easier to reason about
+ - `main`: This is the main executable. It will read the config and spawn servers accordingly
+ - `kvstore` (package `server`): This is an executable spawned under the hood by `main`. `main` sends the cluster config to these processes via an RPC. The motivation behind this is twofold; it gave  me some more practice with Go's RPC framework, and it provided an easy way to debug the code.
+ - `standalone_test`: This test is a standalone executable (not `_test`-like), which can be run against `main` or someone else's code implementing the same interfaces. It tests the following things:
+   - Basic getting and setting
+   - Conflicting CAS from parallel routines
+   - Ability for program to work with one or two (out of 5) follower servers down
+   - Inability for program to work with 3 (out of five) follower servers down
+   - Getting and setting of binary values
+

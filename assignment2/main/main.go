@@ -14,8 +14,10 @@ import (
 	"strconv"
 )
 
+// The port used for propagating config files
 const MAINPORT = ":8999"
 
+// The main executable, which sets up all the servers
 func main() {
 	file, err := ioutil.ReadFile("./config.json")
 	if err != nil {
