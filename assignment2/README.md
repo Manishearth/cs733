@@ -7,7 +7,9 @@ followed by `$GOPATH/bin/main`
 
 The standalone tester can be built similarly via  `go install github.com/Manishearth/cs733/assignment2/standalone_tester`, and running the corresponding executable in the directory
 
-Please ensure that the program to be tested is running first, and that the `config.json` from the `standalone_tester` directory is being used.
+Please ensure that the program to be tested is running first, and that the `config.json` from the `standalone_tester` directory is being used. The `standalone_tester` is designed to kill off some servers as well, which is why the particular config is vital for it to work. 
+
+Under moderate load the system gets much slower than it should. I have yet to investigate this.
 
 
 ------
@@ -46,4 +48,6 @@ Now, you may talk to the first server via TCP. The protocol is as follows:
   - `ERR_VERSION`: The `cas` command failed due to a version mismatch
   - `ERR_NOT_FOUND`: The key doesn't exist
   - `ERR_CMD_ERR`: The input was malformed
-  -
+
+
+Internally, these are sent to a log replication mechanism based off of Raft. When the log entry is "committed", then a response will be received

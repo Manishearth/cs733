@@ -1,12 +1,12 @@
 package main
 
 import (
+	"encoding/gob"
 	"github.com/Manishearth/cs733/assignment2/raft"
 	"log"
 	"net/rpc"
 	"os"
 	"strconv"
-	"encoding/gob"
 )
 
 func main() {
@@ -32,9 +32,5 @@ func main() {
 
 	r, _ := raft.NewRaft(&config, id, commitCh)
 
-    
-
-    r.Listen()
+	r.Listen()
 }
-
-

@@ -11,6 +11,10 @@ import (
 	"log"
 )
 
+// This file contains most of the code for the Raft interface
+// and SharedLog
+
+
 type Lsn uint64      // Log sequence number, unique for all time.
 type ErrRedirect int // See Log.Append. Implements Error interface.
 

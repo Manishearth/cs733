@@ -10,52 +10,37 @@ import (
 	"fmt"
 )
 
-// A value in the key-value store
-type Value struct {
-	val     []byte
-	exptime int64
-	version int64
+// This file contains most of the code on the "listening" side of the system
+
+// Do all the setup for listening
+func (t *Raft) Listen() {
+	for {
+		listener, err := net.Listen("tcp", ":"+strconv.Itoa(t.Config.Servers[t.SelfId].ClientPort))
+
+		if err != nil {
+			log.Printf("Error setting up listener: %v", err.Error())
+			continue
+		}
+
+		// This channel will queue messages from sockets
+		messages := make(chan IndexedAck, 1000)
+
+		// Start backend goroutine
+		go t.Backend(messages)
+
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Printf("Error starting connection: %v", err.Error())
+				continue
+			}
+			defer conn.Close()
+			// Spawn a socket goroutine
+			go t.newSocket(conn, messages)
+		}
+	}
 }
 
-// A generic message to be passed to the backend
-type Message struct {
-	// The actual command (Set, Get, Getm, Cas, Delete)
-	// I would prefer to use an enum here, but that doesn't
-	// seem to be an option
-	Data interface{}
-}
-
-// Concrete message types
-
-// Set a key with given expiry time
-type Set struct {
-	Key     string
-	Exptime int64
-	Value   []byte
-}
-
-// Get the value for a key
-type Get struct {
-	Key string
-}
-
-// Get the metadata for a key
-type Getm struct {
-	Key string
-}
-
-// Compare-and-swap a key's value iff the version matches
-type Cas struct {
-	Key     string
-	Exptime int64
-	Version int64
-	Value   []byte
-}
-
-// Delete a key
-type Delete struct {
-	Key string
-}
 
 // Parse the input string and turn it into a concrete message type
 func parse(inp string) (interface{}, int, error) {
@@ -124,34 +109,67 @@ func parse(inp string) (interface{}, int, error) {
 	}
 }
 
-func (t *Raft) Listen() {
+// Goroutine that handles interaction with a single connection
+func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
+	reader := bufio.NewReader(conn)
+	// scanner.Scan() automatically breaks at \r\n for us
 	for {
-		listener, err := net.Listen("tcp", ":"+strconv.Itoa(t.Config.Servers[t.SelfId].ClientPort))
-
+		// Create acknowledgement channel
+		ack := make(chan string, 2)
+		text,err := ReadString(reader)
 		if err != nil {
-			log.Printf("Error setting up listener: %v", err.Error())
+			conn.Write([]byte("ERR_CMD_ERR\r\n"))
+			continue
+		}
+		// Parse input
+		data, n, err := parse(text)
+		if err != nil {
+			conn.Write([]byte(err.Error()))
 			continue
 		}
 
-		// This channel will queue messages from sockets
-		messages := make(chan IndexedAck, 1000)
-
-		// Start backend goroutine
-		go t.Backend(messages)
-
-		for {
-			conn, err := listener.Accept()
+		value := make([]byte, 0)
+		// In case we are supposed to read a value of n bytes, read it
+		if n != -1 {
+			buf, err := ReadBytes(reader, n)
 			if err != nil {
-				log.Printf("Error starting connection: %v", err.Error())
-				continue
+				conn.Write([]byte("ERR_CMD_ERR\r\n"))
+				continue				
 			}
-			defer conn.Close()
-			// Spawn a socket goroutine
-			go t.newSocket(conn, messages)
+			value = buf
 		}
+
+		switch data.(type) {
+		case Set:
+			set := data.(Set)
+			set.Value = value
+			data = set
+		case Cas:
+			cas := data.(Cas)
+			cas.Value = value
+			data = cas
+		}
+
+		message := Message{data}
+		log, err := t.Append(message)
+		if err != nil {
+			server := t.Config.Servers[0]
+			conn.Write([]byte(fmt.Sprintf("ERR_REDIRECT %v:%v\r\n", server.Hostname, server.ClientPort)))
+			return
+		}
+		cs<- IndexedAck {
+			lsn: log.Lsn,
+			ack: ack,
+		}
+		// Wait for acknowledgement
+		out := <-ack
+		conn.Write([]byte(out+"\r\n"))
 	}
 }
 
+// I couldn't find a library which lets me both
+// read whole lines up to \r\n or \n, as well as
+// do n-byte reads when I want to, so I wrote my own
 func ReadString(r *bufio.Reader) (string, error) {
 	buf := make([]byte, 0)
 	for {
@@ -217,62 +235,4 @@ func ReadBytes(r *bufio.Reader, n int) ([]byte, error) {
 		}
 	}
 	return buf, errors.New("ERR_CMD_ERR\r\n")
-}
-// Goroutine that handles interaction with a single connection
-// It can send structured messages via the Message channel
-func (t *Raft) newSocket(conn net.Conn, cs chan IndexedAck) {
-	reader := bufio.NewReader(conn)
-	// scanner.Scan() automatically breaks at \r\n for us
-	for {
-		// Create acknowledgement channel
-		ack := make(chan string, 2)
-		text,err := ReadString(reader)
-		if err != nil {
-			conn.Write([]byte("ERR_CMD_ERR\r\n"))
-			continue
-		}
-		// Parse input
-		data, n, err := parse(text)
-		if err != nil {
-			conn.Write([]byte(err.Error()))
-			continue
-		}
-
-		value := make([]byte, 0)
-		// In case we are supposed to read a value of n bytes, read it
-		if n != -1 {
-			buf, err := ReadBytes(reader, n)
-			if err != nil {
-				conn.Write([]byte("ERR_CMD_ERR\r\n"))
-				continue				
-			}
-			value = buf
-		}
-
-		switch data.(type) {
-		case Set:
-			set := data.(Set)
-			set.Value = value
-			data = set
-		case Cas:
-			cas := data.(Cas)
-			cas.Value = value
-			data = cas
-		}
-
-		message := Message{data}
-		log, err := t.Append(message)
-		if err != nil {
-			server := t.Config.Servers[0]
-			conn.Write([]byte(fmt.Sprintf("ERR_REDIRECT %v:%v\r\n", server.Hostname, server.ClientPort)))
-			return
-		}
-		cs<- IndexedAck {
-			lsn: log.Lsn,
-			ack: ack,
-		}
-		// Wait for acknowledgement
-		out := <-ack
-		conn.Write([]byte(out+"\r\n"))
-	}
 }

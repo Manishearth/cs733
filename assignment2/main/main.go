@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"github.com/Manishearth/cs733/assignment2/raft"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -9,9 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
-	"encoding/json"
-	"io/ioutil"
-	"fmt"
 )
 
 const MAINPORT = ":8999"
