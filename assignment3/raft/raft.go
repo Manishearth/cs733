@@ -8,14 +8,16 @@ type Data string // String for now, we can have more structured data (or byte da
 type LogEntry interface {
 	Lsn() Lsn
 	Data() Data
-	Committed() bool
+	// Committed() bool
+    Term() uint
 }
 
 // Simple string entry
 type StringEntry struct {
 	lsn       Lsn
 	data      Data
-	committed bool
+	// committed bool
+    term uint
 }
 
 func (e StringEntry) Lsn() Lsn {
@@ -26,14 +28,20 @@ func (e StringEntry) Data() Data {
 	return e.data
 }
 
+/*
 func (e StringEntry) Committed() bool {
 	return e.committed
+}
+*/
+
+func (e StringEntry) Term() uint {
+    return e.term
 }
 
 type RaftServer struct {
 	Id          uint
 	CommitCh    chan Data
-	EventCh     chan Event
+	EventCh     chan ChanMessage
 	Network     CommunicationHelper
 	Log         []LogEntry
 	Term        uint
@@ -42,7 +50,6 @@ type RaftServer struct {
 	LastApplied uint
 }
 
-type Event interface{}
 type State interface{}
 
 type CommunicationHelper interface {
@@ -80,11 +87,10 @@ func MakeRafts(count uint) []RaftServer {
 	for i := uint(0); i < count; i++ {
 		commit := make(chan Data, 1000)
 		log := make([]LogEntry, 1000)
-		eventCh := make(chan Event)
 		servers[i] = RaftServer{
 			Id:          i,
 			CommitCh:    commit,
-			EventCh:     eventCh,
+			EventCh:     network[i],
 			Network:     ChanCommunicationHelper{network},
 			Log:         log,
 			Term:        0,
