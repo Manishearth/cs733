@@ -9,15 +9,15 @@ type LogEntry interface {
 	Lsn() Lsn
 	Data() Data
 	// Committed() bool
-    Term() uint
+	Term() uint
 }
 
 // Simple string entry
 type StringEntry struct {
-	lsn       Lsn
-	data      Data
+	lsn  Lsn
+	data Data
 	// committed bool
-    term uint
+	term uint
 }
 
 func (e StringEntry) Lsn() Lsn {
@@ -35,7 +35,7 @@ func (e StringEntry) Committed() bool {
 */
 
 func (e StringEntry) Term() uint {
-    return e.term
+	return e.term
 }
 
 type RaftServer struct {
@@ -46,7 +46,7 @@ type RaftServer struct {
 	Log         []LogEntry
 	Term        uint
 	VotedFor    int
-	CommitIndex uint
+	CommitIndex int
 	LastApplied uint
 }
 
@@ -86,7 +86,7 @@ func MakeRafts(count uint) []RaftServer {
 
 	for i := uint(0); i < count; i++ {
 		commit := make(chan Data, 1000)
-		log := make([]LogEntry, 1000)
+		log := make([]LogEntry, 0)
 		servers[i] = RaftServer{
 			Id:          i,
 			CommitCh:    commit,
@@ -95,7 +95,7 @@ func MakeRafts(count uint) []RaftServer {
 			Log:         log,
 			Term:        0,
 			VotedFor:    -1,
-			CommitIndex: 0,
+			CommitIndex: -1,
 			LastApplied: 0,
 		}
 	}

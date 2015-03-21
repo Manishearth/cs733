@@ -35,14 +35,14 @@ func (raft *RaftServer) loop() {
 
 type TimeoutEvent struct{}
 type VoteRequestEvent struct {
-	candidateId uint
-	term uint
+	candidateId  uint
+	term         uint
 	lastLogIndex uint
-	lastLogTerm uint
+	lastLogTerm  uint
 }
 
 type VoteResponse struct {
-	term uint
+	term        uint
 	voteGranted bool
 }
 
@@ -52,20 +52,27 @@ type ClientAppendEvent struct {
 
 type ClientAppendResponse struct {
 	Queued bool
-	Lsn Lsn
+	Lsn    Lsn
 }
 
 type AppendRPCEvent struct {
-	term uint
-	leaderId uint
+	term         uint
+	leaderId     uint
 	prevLogIndex int
-	prevLogTerm uint
-	entries []LogEntry
-	leaderCommit uint
+	prevLogTerm  uint
+	entries      []LogEntry
+	leaderCommit int
+}
+
+type DebugEvent struct{}
+type DebugResponse struct {
+	Log []LogEntry
+	Term uint
+	CommitIndex int
 }
 
 type AppendRPCResponse struct {
-	term uint
+	term    uint
 	success bool
 }
 
@@ -73,65 +80,68 @@ func (raft *RaftServer) follower() State {
 	timer := time.AfterFunc(time.Duration(500)*time.Millisecond, func() { raft.EventCh <- ChanMessage{make(chan Response), TimeoutEvent{}} })
 	for event := range raft.EventCh {
 		switch event.signal.(type) {
-		case TimeoutEvent: 
+		case DebugEvent:
+			event.ack <- DebugResponse {Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+		case TimeoutEvent:
 			return Candidate{}
 		case VoteRequestEvent:
-			timer.Reset(time.Duration(500)*time.Millisecond)
+			timer.Reset(time.Duration(500) * time.Millisecond)
 			msg := event.signal.(VoteRequestEvent)
 			if msg.term < raft.Term {
-				event.ack <- VoteResponse {term: raft.Term, voteGranted: false}
-				return Follower {}
+				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+				return Follower{}
 			}
 			if msg.term > raft.Term {
 				raft.Term = msg.term
 				raft.VotedFor = -1
 			}
 			if raft.VotedFor != -1 {
-				event.ack <- VoteResponse {term: raft.Term, voteGranted: false}
-				return Follower {}
+				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+				return Follower{}
 			}
 			if len(raft.Log) > 0 {
 				if msg.lastLogTerm < raft.Log[len(raft.Log)-1].Term() {
-					event.ack <- VoteResponse {term: raft.Term, voteGranted: false}
-					return Follower {}				
+					event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+					return Follower{}
 				}
 				if msg.lastLogTerm == raft.Log[len(raft.Log)-1].Term() {
 					if int(msg.lastLogIndex) < len(raft.Log)-1 {
-						event.ack <- VoteResponse {term: raft.Term, voteGranted: false}
-						return Follower {}
-					}		
+						event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+						return Follower{}
+					}
 				}
 			}
 			// If we reach this far, we are behind on the log and should vote
-			event.ack <- VoteResponse {term: raft.Term, voteGranted: true}
+			event.ack <- VoteResponse{term: raft.Term, voteGranted: true}
 			raft.VotedFor = int(msg.candidateId)
 			return Follower{}
 		case ClientAppendEvent:
-			event.ack <- ClientAppendResponse {false, Lsn(0)}
-			return Follower {}
+			event.ack <- ClientAppendResponse{false, Lsn(0)}
+			return Follower{}
 		case AppendRPCEvent:
-			timer.Reset(time.Duration(500)*time.Millisecond)
+
+			timer.Reset(time.Duration(500) * time.Millisecond)
 			msg := event.signal.(AppendRPCEvent)
 			if msg.term < raft.Term {
 				event.ack <- AppendRPCResponse{raft.Term, false}
-				return Follower {}
+				return Follower{}
 			}
-			if len(raft.Log)-1 < msg.prevLogIndex{
+			if len(raft.Log)-1 < msg.prevLogIndex {
 				event.ack <- AppendRPCResponse{raft.Term, false}
-				return Follower {}
+				return Follower{}
 			}
 			if len(raft.Log) > 0 {
 				if raft.Log[len(raft.Log)-1].Term() != msg.prevLogTerm {
 					event.ack <- AppendRPCResponse{raft.Term, false}
-					return Follower {}					
+					return Follower{}
 				}
 			}
 			delete := false
-			for i := 1; i<=len(msg.entries); i++ {
+			for i := 1; i <= len(msg.entries); i++ {
 				if len(raft.Log) > msg.prevLogIndex+i {
 					if raft.Log[msg.prevLogIndex+i].Term() != msg.entries[i-1].Term() {
 						delete = true
-						raft.Log[msg.prevLogIndex + i] = msg.entries[i-1]
+						raft.Log[msg.prevLogIndex+i] = msg.entries[i-1]
 					}
 				} else {
 					raft.Log = append(raft.Log, msg.entries[i-1])
@@ -142,17 +152,18 @@ func (raft *RaftServer) follower() State {
 				raft.Log = raft.Log[:msg.prevLogIndex+len(msg.entries)+1]
 			}
 			if len(msg.entries) > 0 {
-				lastCommit := min(raft.CommitIndex, uint(msg.prevLogIndex+len(msg.entries)))
-				lastCommitNew := min(msg.leaderCommit, uint(len(raft.Log)))
+				lastCommit := min(raft.CommitIndex, msg.prevLogIndex+len(msg.entries))
+				lastCommitNew := min(int(msg.leaderCommit), len(raft.Log))
 				if msg.leaderCommit > lastCommit {
-					for i:= lastCommit+1; i<= lastCommitNew; i++ {
+					for i := lastCommit + 1; i <= lastCommitNew; i++ {
 						raft.CommitCh <- raft.Log[i].Data()
 					}
 				}
 				raft.CommitIndex = lastCommitNew
 			}
-			return Follower {}
+			return Follower{}
 		}
+
 
 	}
 	return Follower{}
@@ -162,13 +173,13 @@ func (raft *RaftServer) candidate() State {
 	return Candidate{}
 }
 
+
 func (raft *RaftServer) leader() State {
 	return Leader{}
 }
 
-
-func min(a uint, b uint) uint {
-	if a >= b {
+func min(a int, b int) int {
+	if a <= b {
 		return a
 	} else {
 		return b
