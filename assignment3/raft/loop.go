@@ -9,7 +9,6 @@ type Follower struct {
 }
 
 type Candidate struct {
-	// empty
 }
 
 type Leader struct {
@@ -18,6 +17,9 @@ type Leader struct {
 
 func (raft *RaftServer) loop() {
 	state := State(Follower{}) // begin life as a follower
+	if raft.Id == 0 {
+		state = State(Leader{}) // No need to have an election initially
+	}
 
 	for {
 		switch state.(type) {
@@ -34,17 +36,6 @@ func (raft *RaftServer) loop() {
 }
 
 type TimeoutEvent struct{}
-type VoteRequestEvent struct {
-	candidateId  uint
-	term         uint
-	lastLogIndex uint
-	lastLogTerm  uint
-}
-
-type VoteResponse struct {
-	term        uint
-	voteGranted bool
-}
 
 type ClientAppendEvent struct {
 	data Data
@@ -66,8 +57,8 @@ type AppendRPCEvent struct {
 
 type DebugEvent struct{}
 type DebugResponse struct {
-	Log []LogEntry
-	Term uint
+	Log         []LogEntry
+	Term        uint
 	CommitIndex int
 }
 
@@ -78,62 +69,63 @@ type AppendRPCResponse struct {
 
 func (raft *RaftServer) follower() State {
 	timer := time.AfterFunc(time.Duration(500)*time.Millisecond, func() { raft.EventCh <- ChanMessage{make(chan Response), TimeoutEvent{}} })
+Loop:
 	for event := range raft.EventCh {
 		switch event.signal.(type) {
 		case DebugEvent:
-			event.ack <- DebugResponse {Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+			event.ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
 		case TimeoutEvent:
+			timer.Stop()
+			raft.Term++
 			return Candidate{}
 		case VoteRequestEvent:
 			timer.Reset(time.Duration(500) * time.Millisecond)
 			msg := event.signal.(VoteRequestEvent)
 			if msg.term < raft.Term {
 				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
-				return Follower{}
+				continue Loop
 			}
 			if msg.term > raft.Term {
 				raft.Term = msg.term
 				raft.VotedFor = -1
 			}
 			if raft.VotedFor != -1 {
-				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
-				return Follower{}
+				event.ack <- VoteResponse{term: raft.Term, voteGranted: false, voterId: raft.Id}
+				continue Loop
 			}
 			if len(raft.Log) > 0 {
 				if msg.lastLogTerm < raft.Log[len(raft.Log)-1].Term() {
-					event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
-					return Follower{}
+					event.ack <- VoteResponse{term: raft.Term, voteGranted: false, voterId: raft.Id}
+					continue Loop
 				}
 				if msg.lastLogTerm == raft.Log[len(raft.Log)-1].Term() {
 					if int(msg.lastLogIndex) < len(raft.Log)-1 {
-						event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
-						return Follower{}
+						event.ack <- VoteResponse{term: raft.Term, voteGranted: false, voterId: raft.Id}
+						continue Loop
 					}
 				}
 			}
 			// If we reach this far, we are behind on the log and should vote
-			event.ack <- VoteResponse{term: raft.Term, voteGranted: true}
+			event.ack <- VoteResponse{term: raft.Term, voteGranted: true, voterId: raft.Id}
 			raft.VotedFor = int(msg.candidateId)
-			return Follower{}
 		case ClientAppendEvent:
 			event.ack <- ClientAppendResponse{false, Lsn(0)}
-			return Follower{}
 		case AppendRPCEvent:
 
 			timer.Reset(time.Duration(500) * time.Millisecond)
 			msg := event.signal.(AppendRPCEvent)
 			if msg.term < raft.Term {
 				event.ack <- AppendRPCResponse{raft.Term, false}
-				return Follower{}
+				continue Loop
 			}
 			if len(raft.Log)-1 < msg.prevLogIndex {
 				event.ack <- AppendRPCResponse{raft.Term, false}
-				return Follower{}
+				continue Loop
 			}
 			if len(raft.Log) > 0 {
 				if raft.Log[len(raft.Log)-1].Term() != msg.prevLogTerm {
 					event.ack <- AppendRPCResponse{raft.Term, false}
-					return Follower{}
+					continue Loop
 				}
 			}
 			delete := false
@@ -161,18 +153,94 @@ func (raft *RaftServer) follower() State {
 				}
 				raft.CommitIndex = lastCommitNew
 			}
-			return Follower{}
+		default:
 		}
-
 
 	}
 	return Follower{}
 }
 
+type VoteRequestEvent struct {
+	candidateId  uint
+	term         uint
+	lastLogIndex int
+	lastLogTerm  uint
+}
+
+type VoteResponse struct {
+	term        uint
+	voteGranted bool
+	voterId     uint
+}
+
 func (raft *RaftServer) candidate() State {
+	votes := make([]bool, 5)
+	votes[raft.Id] = true
+	lastLogTerm := uint(0)
+	if len(raft.Log) > 0 {
+		lastLogTerm = uint(len(raft.Log) - 1)
+	}
+	for i := 0; i < 5; i++ {
+		if uint(i) != raft.Id {
+			go raft.voteRequest(raft.Term, uint(i), len(raft.Log)-1, lastLogTerm)
+		}
+	}
+	timer := time.AfterFunc(time.Duration(1000)*time.Millisecond, func() { raft.EventCh <- ChanMessage{make(chan Response), TimeoutEvent{}} })
+Loop:
+	for event := range raft.EventCh {
+		switch event.signal.(type) {
+		case TimeoutEvent:
+			raft.Term++
+			return Candidate{}
+		case DebugEvent:
+			event.ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+		case VoteRequestEvent:
+			msg := event.signal.(VoteRequestEvent)
+			if raft.Term >= msg.term {
+				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+			} else {
+				raft.Term = msg.term
+				event.ack <- VoteResponse{term: raft.Term, voteGranted: true}
+				raft.VotedFor = int(msg.candidateId)
+			}
+		case AppendRPCEvent:
+			event.ack <- AppendRPCResponse{raft.Term, false}
+		case ClientAppendEvent:
+			event.ack <- ClientAppendResponse{false, Lsn(0)}
+		case VoteResponse:
+			timer.Reset(time.Duration(1000) * time.Millisecond)
+			msg := event.signal.(VoteResponse)
+			if msg.term != raft.Term {
+				continue Loop
+			}
+			votes[msg.voterId] = true
+			count := 0
+			for i := 0; i < 5; i++ {
+				if votes[i] {
+					count++
+				}
+			}
+			if count > 2 {
+				return Leader{}
+			} else {
+				raft.Term++
+				return Candidate{}
+			}
+		default:
+
+		}
+	}
 	return Candidate{}
 }
 
+func (raft *RaftServer) voteRequest(term uint, id uint, lastLogIndex int, lastLogTerm uint) {
+	ack := raft.Network.Send(VoteRequestEvent{candidateId: raft.Id, term: term, lastLogIndex: lastLogIndex, lastLogTerm: lastLogTerm}, id)
+	resp := <-ack
+	if raft.Term != term {
+		return
+	}
+	raft.EventCh <- ChanMessage{make(chan Response), resp}
+}
 
 func (raft *RaftServer) leader() State {
 	return Leader{}
