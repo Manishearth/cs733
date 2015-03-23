@@ -63,8 +63,9 @@ type DebugResponse struct {
 }
 
 type AppendRPCResponse struct {
-	term    uint
-	success bool
+	term       uint
+	success    bool
+	followerId uint
 }
 
 func (raft *RaftServer) follower() State {
@@ -115,16 +116,16 @@ Loop:
 			timer.Reset(time.Duration(500) * time.Millisecond)
 			msg := event.signal.(AppendRPCEvent)
 			if msg.term < raft.Term {
-				event.ack <- AppendRPCResponse{raft.Term, false}
+				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
 				continue Loop
 			}
 			if len(raft.Log)-1 < msg.prevLogIndex {
-				event.ack <- AppendRPCResponse{raft.Term, false}
+				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
 				continue Loop
 			}
 			if len(raft.Log) > 0 {
 				if raft.Log[len(raft.Log)-1].Term() != msg.prevLogTerm {
-					event.ack <- AppendRPCResponse{raft.Term, false}
+					event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
 					continue Loop
 				}
 			}
@@ -152,6 +153,7 @@ Loop:
 					}
 				}
 				raft.CommitIndex = lastCommitNew
+				event.ack <- AppendRPCResponse{raft.Term, true, raft.Id}
 			}
 		default:
 		}
@@ -202,9 +204,10 @@ Loop:
 				raft.Term = msg.term
 				event.ack <- VoteResponse{term: raft.Term, voteGranted: true}
 				raft.VotedFor = int(msg.candidateId)
+				return Follower{}
 			}
 		case AppendRPCEvent:
-			event.ack <- AppendRPCResponse{raft.Term, false}
+			event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
 		case ClientAppendEvent:
 			event.ack <- ClientAppendResponse{false, Lsn(0)}
 		case VoteResponse:
@@ -242,7 +245,81 @@ func (raft *RaftServer) voteRequest(term uint, id uint, lastLogIndex int, lastLo
 	raft.EventCh <- ChanMessage{make(chan Response), resp}
 }
 
+func (raft *RaftServer) appendRequest(term uint, id uint, prevLogIndex int, prevLogTerm uint, entries []LogEntry, leaderCommit int) {
+	ack := raft.Network.Send(AppendRPCEvent{term: term, leaderId: raft.Id, prevLogIndex: prevLogIndex, prevLogTerm: prevLogTerm, entries: entries, leaderCommit: leaderCommit}, id)
+	resp := <-ack
+	if raft.Term != term {
+		return
+	}
+	raft.EventCh <- ChanMessage{make(chan Response), resp}
+}
+
+type HeartBeatEvent struct{}
+
 func (raft *RaftServer) leader() State {
+	nextIndex := make([]uint, 5)
+	matchIndex := make([]uint, 5)
+	for i := 0; i < 5; i++ {
+		nextIndex[i] = uint(len(raft.Log))
+	}
+	heartbeat := time.NewTicker(time.Duration(500) * time.Millisecond)
+	quit := make(chan bool, 1)
+	go func() {
+		for {
+			select {
+			case <-heartbeat.C:
+				raft.EventCh <- ChanMessage{make(chan Response, 1), HeartBeatEvent{}}
+			case <-quit:
+				heartbeat.Stop()
+				return
+			}
+		}
+	}()
+
+	for event := range raft.EventCh {
+		switch event.signal.(type) {
+		case HeartBeatEvent:
+			for i := 0; i < 5; i++ {
+				if len(raft.Log) >= int(nextIndex[i]) {
+					// stub
+					go appendRequest(raft.Term, i)
+				}
+			}
+		case DebugEvent:
+			event.ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+		case VoteRequestEvent:
+			msg := event.signal.(VoteRequestEvent)
+			if raft.Term >= msg.term {
+				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+			} else {
+				raft.Term = msg.term
+				event.ack <- VoteResponse{term: raft.Term, voteGranted: true}
+				raft.VotedFor = int(msg.candidateId)
+				quit <- true
+				return Follower{}
+			}
+		case AppendRPCEvent:
+			msg := event.signal.(AppendRPCEvent)
+			if raft.Term < msg.term {
+				raft.Term = msg.term
+				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
+				quit <- true
+				return Follower{}
+			}
+		case ClientAppendEvent:
+			lsn := Lsn(0)
+			if len(raft.Log) > 0 {
+				lsn = raft.Log[len(raft.Log)-1].Lsn()
+			}
+			lsn++
+			event.ack <- ClientAppendResponse{true, lsn}
+		case AppendRPCResponse:
+			msg := event.signal.(AppendRPCResponse)
+			// stub
+		default:
+
+		}
+	}
 	return Leader{}
 }
 
