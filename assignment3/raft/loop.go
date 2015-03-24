@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"sort"
 	"time"
 )
 
@@ -63,9 +64,11 @@ type DebugResponse struct {
 }
 
 type AppendRPCResponse struct {
-	term       uint
-	success    bool
-	followerId uint
+	term         uint
+	success      bool
+	followerId   uint
+	prevLogIndex int
+	count        uint
 }
 
 func (raft *RaftServer) follower() State {
@@ -116,16 +119,16 @@ Loop:
 			timer.Reset(time.Duration(500) * time.Millisecond)
 			msg := event.signal.(AppendRPCEvent)
 			if msg.term < raft.Term {
-				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
+				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
 				continue Loop
 			}
 			if len(raft.Log)-1 < msg.prevLogIndex {
-				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
+				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
 				continue Loop
 			}
 			if len(raft.Log) > 0 {
 				if raft.Log[len(raft.Log)-1].Term() != msg.prevLogTerm {
-					event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
+					event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
 					continue Loop
 				}
 			}
@@ -153,8 +156,8 @@ Loop:
 					}
 				}
 				raft.CommitIndex = lastCommitNew
-				event.ack <- AppendRPCResponse{raft.Term, true, raft.Id}
 			}
+			event.ack <- AppendRPCResponse{raft.Term, true, raft.Id, msg.prevLogIndex, uint(len(msg.entries))}
 		default:
 		}
 
@@ -207,7 +210,7 @@ Loop:
 				return Follower{}
 			}
 		case AppendRPCEvent:
-			event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
+			event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
 		case ClientAppendEvent:
 			event.ack <- ClientAppendResponse{false, Lsn(0)}
 		case VoteResponse:
@@ -281,8 +284,11 @@ func (raft *RaftServer) leader() State {
 		case HeartBeatEvent:
 			for i := 0; i < 5; i++ {
 				if len(raft.Log) >= int(nextIndex[i]) {
-					// stub
-					go appendRequest(raft.Term, i)
+					prevLogTerm := raft.Term
+					if len(raft.Log) > 0 && nextIndex[i] > 0 {
+						prevLogTerm = raft.Log[nextIndex[i]-1].Term()
+					}
+					go raft.appendRequest(raft.Term, uint(i), int(nextIndex[i])-1, prevLogTerm, raft.Log[nextIndex[i]:], raft.CommitIndex)
 				}
 			}
 		case DebugEvent:
@@ -302,7 +308,7 @@ func (raft *RaftServer) leader() State {
 			msg := event.signal.(AppendRPCEvent)
 			if raft.Term < msg.term {
 				raft.Term = msg.term
-				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id}
+				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
 				quit <- true
 				return Follower{}
 			}
@@ -315,7 +321,39 @@ func (raft *RaftServer) leader() State {
 			event.ack <- ClientAppendResponse{true, lsn}
 		case AppendRPCResponse:
 			msg := event.signal.(AppendRPCResponse)
-			// stub
+			id := msg.followerId
+			if !msg.success {
+				if nextIndex[id] > 0 {
+					nextIndex[id] = nextIndex[id] - 1
+				} else {
+					nextIndex[id] = 0
+				}
+				continue
+			}
+			if msg.term > raft.Term {
+				return Follower{}
+			}
+			if uint(msg.prevLogIndex+int(msg.count)) > nextIndex[id] {
+				nextIndex[id] = uint(msg.prevLogIndex + int(msg.count))
+			}
+			matchCopy := make([]int, 5)
+			// Sadly we can't sort `[]uint`s with the "sort" package
+			// and we can't easily cast `[]uint` to `[]int`
+			for i := range matchIndex {
+				matchCopy[i] = int(matchIndex[i])
+			}
+			sort.IntSlice(matchCopy).Sort()
+			// If there exists an N such that N > commitIndex, a majority
+			// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+			// set commitIndex = N .
+			for i := 3; i >= 0; i-- {
+				// First three elements of sorted matchindex
+				// slice all are less than or equal to a majority of
+				// matchindices
+				if matchCopy[i] > raft.CommitIndex {
+					raft.CommitIndex = matchCopy[i]
+				}
+			}
 		default:
 
 		}
