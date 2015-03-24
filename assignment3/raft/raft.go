@@ -40,7 +40,7 @@ func (e StringEntry) Term() uint {
 
 type RaftServer struct {
 	Id          uint
-	CommitCh    chan Data
+	CommitCh    chan LogEntry
 	EventCh     chan ChanMessage
 	Network     CommunicationHelper
 	Log         []LogEntry
@@ -85,7 +85,7 @@ func MakeRafts(count uint) []RaftServer {
 	servers := make([]RaftServer, count)
 
 	for i := uint(0); i < count; i++ {
-		commit := make(chan Data, 1000)
+		commit := make(chan LogEntry, 100)
 		log := make([]LogEntry, 0)
 		servers[i] = RaftServer{
 			Id:          i,
