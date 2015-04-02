@@ -73,6 +73,7 @@ type Response interface {
 }
 
 // A message, with an ack
+//
 // The ack is not always needed, but this model becomes useful for replacing
 // stuff with an RPC later
 type ChanMessage struct {

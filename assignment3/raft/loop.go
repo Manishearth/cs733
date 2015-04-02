@@ -54,10 +54,13 @@ func (raft *RaftServer) loop() {
 	}
 }
 
+// Times out the server
 type TimeoutEvent struct{}
 
 func (TimeoutEvent) __signalAssert() {}
 
+// Append data to a leader's log
+// Fails for non-leaders
 type ClientAppendEvent struct {
 	data Data
 }
@@ -65,20 +68,21 @@ type ClientAppendEvent struct {
 func (ClientAppendEvent) __signalAssert() {}
 
 type ClientAppendResponse struct {
-	Queued bool
-	Lsn    Lsn
+	Queued bool // was it queued?
+	Lsn    Lsn  // log sequence number for entry
 }
 
 func (ClientAppendResponse) __signalAssert()   {}
 func (ClientAppendResponse) __responseAssert() {}
 
+// AppendRequestRPC
 type AppendRPCEvent struct {
-	term         uint
-	leaderId     uint
-	prevLogIndex int
-	prevLogTerm  uint
-	entries      []LogEntry
-	leaderCommit int
+	term         uint       // the term
+	leaderId     uint       // who the leader is
+	prevLogIndex int        // log index before the entries
+	prevLogTerm  uint       // term of last log entry before the sent entries
+	entries      []LogEntry // entries being sent
+	leaderCommit int        // commit index of leader
 }
 
 func (AppendRPCEvent) __signalAssert() {}
@@ -96,12 +100,13 @@ type DebugResponse struct {
 func (DebugResponse) __signalAssert()   {}
 func (DebugResponse) __responseAssert() {}
 
+// Response to AppendRequestRPC
 type AppendRPCResponse struct {
-	term         uint
-	success      bool
-	followerId   uint
-	prevLogIndex int
-	count        uint
+	term         uint // follower term
+	success      bool // did the AppendRequestRPC succeed?
+	followerId   uint // id of follower
+	prevLogIndex int  // last log index before append
+	count        uint // amount of entries appended
 }
 
 func (AppendRPCResponse) __signalAssert()   {}
@@ -222,19 +227,21 @@ Loop:
 	return Follower{}
 }
 
+// VoteRequestRPC
 type VoteRequestEvent struct {
-	candidateId  uint
-	term         uint
-	lastLogIndex int
-	lastLogTerm  uint
+	candidateId  uint // candidate requesting vote
+	term         uint // term of candidate
+	lastLogIndex int  // index of last log entry of candidate
+	lastLogTerm  uint // term of last log entry of candidate
 }
 
 func (VoteRequestEvent) __signalAssert() {}
 
+// Response to VoteRequestRPC
 type VoteResponse struct {
-	term        uint
-	voteGranted bool
-	voterId     uint
+	term        uint // term of voter
+	voteGranted bool // was the vote granted?
+	voterId     uint // id of voter
 }
 
 func (VoteResponse) __signalAssert()   {}
@@ -342,6 +349,7 @@ func (raft *RaftServer) appendRequest(term uint, id uint, prevLogIndex int, prev
 	raft.EventCh <- ChanMessage{make(chan Response), resp}
 }
 
+// Instructs leader to send out heartbeats
 type HeartBeatEvent struct{}
 
 func (HeartBeatEvent) __signalAssert() {}
@@ -479,7 +487,10 @@ func (raft *RaftServer) leader() State {
 	return Leader{}
 }
 
+// Disconnect server from network
 type DisconnectEvent struct{}
+
+// Reconnect server to network
 type ReconnectEvent struct{}
 
 func (DisconnectEvent) __signalAssert() {}
