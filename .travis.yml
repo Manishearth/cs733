@@ -2,6 +2,7 @@ language: go
 
 script: 
     - cd assignment1 && go test -v
+    - cd -
     - cd assignment3/raft && go test -v
 
 # Travis runs on 1.5 virtual cores so I don't know how well this will work
