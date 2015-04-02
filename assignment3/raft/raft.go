@@ -1,3 +1,4 @@
+// This package contains a toy implementation of the Raft consensus algorithm
 package raft
 
 import (

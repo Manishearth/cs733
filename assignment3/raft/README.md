@@ -2,6 +2,7 @@
 
 This package contains an implementation of the [Raft consensus algorithm](https://ramcloud.stanford.edu/raft.pdf).
 
+[Generated documentation](https://godoc.org/github.com/Manishearth/cs733/assignment3/raft)
 
 Sample usage:
 
@@ -28,7 +29,7 @@ There are various events which you can directly send to a raft instance. Notable
 
 The first two will disconnect and reconnect the server from the network, and the last one will return debugging data through the ack channel specified in the `ChanMessage`
 
-All the events that can be sent (see documentation for details on their contents):
+All the events that can be sent (see [documentation](https://godoc.org/github.com/Manishearth/cs733/assignment3/raft) for details on their contents):
 
  - `TimeoutEvent`
  - `ClientAppendEvent` (returns `ClientAppendResponse`)
