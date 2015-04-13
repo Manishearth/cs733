@@ -18,17 +18,16 @@ func TestInternalAppend(t *testing.T) {
 	}
 	entry := make([]LogEntry, 1)
 	entry[0] = StringEntry{lsn: 0, data: "foo", term: 0}
-	rafts[1].EventCh <- ChanMessage{make(chan Response, 1), AppendRPCEvent{0, 0, -1, 0, entry, -1}}
+	rafts[1].EventCh <- AppendRPCEvent{0, 0, -1, 0, entry, -1}
 	entry = make([]LogEntry, 1)
 	entry[0] = StringEntry{lsn: 0, data: "bar", term: 0}
-	rafts[1].EventCh <- ChanMessage{make(chan Response, 1), AppendRPCEvent{0, 0, 0, 0, entry, -1}}
+	rafts[1].EventCh <- AppendRPCEvent{0, 0, 0, 0, entry, -1}
 	entry = make([]LogEntry, 1)
 	entry[0] = StringEntry{lsn: 0, data: "baz", term: 0}
-	rafts[1].EventCh <- ChanMessage{make(chan Response, 1), AppendRPCEvent{0, 0, 1, 0, entry, 1}}
-	wait := make(chan Response)
-	rafts[1].EventCh <- ChanMessage{wait, DebugEvent{}}
-	ret := (<-wait)
-	debug := ret.(DebugResponse)
+	rafts[1].EventCh <- AppendRPCEvent{0, 0, 1, 0, entry, 1}
+	wait := make(chan DebugResponse)
+	rafts[1].EventCh <- DebugEvent{wait}
+	debug := (<-wait)
 	expect(t, string(debug.Log[0].Data()), "foo")
 	expect(t, string(debug.Log[1].Data()), "bar")
 	expect(t, string(debug.Log[2].Data()), "baz")
@@ -44,13 +43,13 @@ func testClientAppend(t *testing.T, rafts []RaftServer) {
 		go rafts[i].loop()
 	}
 	// Append three bits of data
-	lsnget := make(chan Response, 4)
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "foo"}}
-	lsn1 := (<-lsnget).(ClientAppendResponse).Lsn
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "bar"}}
-	lsn2 := (<-lsnget).(ClientAppendResponse).Lsn
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "baz"}}
-	lsn3 := (<-lsnget).(ClientAppendResponse).Lsn
+	lsnget := make(chan ClientAppendResponse, 4)
+	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
+	lsn1 := (<-lsnget).Lsn
+	rafts[0].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
+	lsn2 := (<-lsnget).Lsn
+	rafts[0].EventCh <- ClientAppendEvent{data: "baz", ack: lsnget}
+	lsn3 := (<-lsnget).Lsn
 
 	for i := 1; i < 5; i++ {
 		// Check that the data eventually propagated
@@ -78,18 +77,18 @@ func TestClientAppend(t *testing.T) {
 // Tests that an append eventually propagates to the network
 // for a network with a minority of servers dysfunctional
 func testClientAppendDisconnect(t *testing.T, rafts []RaftServer) {
-	rafts[3].EventCh <- ChanMessage{make(chan Response), DisconnectEvent{}}
-	rafts[4].EventCh <- ChanMessage{make(chan Response), DisconnectEvent{}}
+	rafts[3].EventCh <- DisconnectEvent{}
+	rafts[4].EventCh <- DisconnectEvent{}
 	for i := 0; i < 5; i++ {
 		go rafts[i].loop()
 	}
-	lsnget := make(chan Response, 4)
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "foo"}}
-	lsn1 := (<-lsnget).(ClientAppendResponse).Lsn
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "bar"}}
-	lsn2 := (<-lsnget).(ClientAppendResponse).Lsn
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "baz"}}
-	lsn3 := (<-lsnget).(ClientAppendResponse).Lsn
+	lsnget := make(chan ClientAppendResponse, 4)
+	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
+	lsn1 := (<-lsnget).Lsn
+	rafts[0].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
+	lsn2 := (<-lsnget).Lsn
+	rafts[0].EventCh <- ClientAppendEvent{data: "baz", ack: lsnget}
+	lsn3 := (<-lsnget).Lsn
 
 	for i := 1; i < 3; i++ {
 		commit := <-rafts[i].CommitCh
@@ -114,17 +113,17 @@ func TestClientAppendDisconnect(t *testing.T) {
 
 // Tests that an append does not propagate in a crippled network
 func testClientAppendDisconnectFail(t *testing.T, rafts []RaftServer) {
-	rafts[3].EventCh <- ChanMessage{make(chan Response), DisconnectEvent{}}
-	rafts[4].EventCh <- ChanMessage{make(chan Response), DisconnectEvent{}}
+	rafts[3].EventCh <- DisconnectEvent{}
+	rafts[4].EventCh <- DisconnectEvent{}
 	// We lose quorum here
-	rafts[2].EventCh <- ChanMessage{make(chan Response), DisconnectEvent{}}
+	rafts[2].EventCh <- DisconnectEvent{}
 	for i := 0; i < 5; i++ {
 		go rafts[i].loop()
 	}
-	lsnget := make(chan Response, 4)
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "foo"}}
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "bar"}}
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "baz"}}
+	lsnget := make(chan ClientAppendResponse, 4)
+	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{data: "baz", ack: lsnget}
 	timer := time.NewTimer(time.Duration(1) * time.Second)
 	select {
 	case <-timer.C:
@@ -143,7 +142,7 @@ func TestClientAppendDisconnectFail(t *testing.T) {
 // persists over an election
 func testElection(t *testing.T, rafts []RaftServer) {
 	// Kill the leader
-	rafts[0].EventCh <- ChanMessage{make(chan Response), DisconnectEvent{}}
+	rafts[0].EventCh <- DisconnectEvent{}
 	for i := 0; i < 5; i++ {
 		go rafts[i].loop()
 	}
@@ -153,10 +152,10 @@ func testElection(t *testing.T, rafts []RaftServer) {
 	// Keep hammering with appends until one of them turns out to hit a leader
 	for newleader == 0 {
 		for i := 1; i < 5; i++ {
-			lsnget := make(chan Response, 1)
-			rafts[i].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "foo"}}
+			lsnget := make(chan ClientAppendResponse, 1)
+			rafts[i].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
 			// If something was queued, then that must be the new leader
-			if (<-lsnget).(ClientAppendResponse).Queued {
+			if (<-lsnget).Queued {
 				if newleader != 0 {
 					t.Errorf("Both %v and %v were elected", i, newleader)
 				}
@@ -174,14 +173,14 @@ func testElection(t *testing.T, rafts []RaftServer) {
 	}
 
 	// Let's reconnect the old leader and check if it gets the new data
-	rafts[0].EventCh <- ChanMessage{make(chan Response), ReconnectEvent{}}
+	rafts[0].EventCh <- ReconnectEvent{}
 	{
 		commit := <-rafts[0].CommitCh
 		t.Logf("Found data %v on server %v, with lsn %v\n", commit.Data(), 0, commit.Lsn())
 		expect(t, "foo", string(commit.Data()))
 	}
 	// ... and kill the new leader
-	rafts[newleader].EventCh <- ChanMessage{make(chan Response), DisconnectEvent{}}
+	rafts[newleader].EventCh <- DisconnectEvent{}
 
 	newnewleader := newleader
 	// Keep hammering with appends until one of them turns out to hit a leader
@@ -191,9 +190,9 @@ func testElection(t *testing.T, rafts []RaftServer) {
 				// Don't even try for the dead leader
 				continue
 			}
-			lsnget := make(chan Response, 1)
-			rafts[i].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "bar"}}
-			if (<-lsnget).(ClientAppendResponse).Queued {
+			lsnget := make(chan ClientAppendResponse, 1)
+			rafts[i].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
+			if (<-lsnget).Queued {
 				t.Logf("Successful ClientAppend on %v\n", i)
 				newnewleader = i
 			}
@@ -221,29 +220,18 @@ func TestElection(t *testing.T) {
 // This "evil" communication helper simulates the dropping of RPC packets
 // by refusing to send or returning bogus response channels every now and then
 type EvilChanCommunicationHelper struct {
-	chans []chan ChanMessage
+	chans []chan Signal
 	t     *testing.T
 }
 
-func (c EvilChanCommunicationHelper) Send(signal Signal, id uint) chan Response {
+func (c EvilChanCommunicationHelper) Send(signal Signal, id uint) {
 	rand.Seed(time.Now().UTC().UnixNano())
-	ack := make(chan Response, 1)
 	if rand.Intn(10) > 8 {
 		// drop 10% of packets
 		c.t.Logf("Dropped packet %T\n", signal)
-		return ack // `message` will never get sent
+		return // `signal` will never get sent
 	}
-	message := ChanMessage{ack, signal}
-	c.chans[id] <- message
-	if rand.Intn(10) > 8 {
-		// Return bogus ack channels 10% of the time
-		// This is akin to dropping response packets,
-		// just that we're doing it a priori
-		c.t.Logf("Dropped response packet\n")
-		return make(chan Response, 1) // nothing will get received on this
-	}
-	c.t.Logf("Nothing was dropped\n")
-	return ack
+	c.chans[id] <- signal
 }
 
 func TestClientAppendEvil(t *testing.T) {
@@ -272,21 +260,18 @@ func TestElectionEvil(t *testing.T) {
 
 // This "lazy" communication helper sometimes snoozes before doing its work
 type LazyChanCommunicationHelper struct {
-	chans []chan ChanMessage
+	chans []chan Signal
 	t     *testing.T
 }
 
-func (c LazyChanCommunicationHelper) Send(signal Signal, id uint) chan Response {
+func (c LazyChanCommunicationHelper) Send(signal Signal, id uint) {
 	rand.Seed(time.Now().UTC().UnixNano())
-	ack := make(chan Response, 1)
-	message := ChanMessage{ack, signal}
 	go (func() {
 		duration := rand.Intn(400)
 		c.t.Logf("Snoozing for %v ms\n", duration)
 		time.Sleep(time.Duration(duration) * time.Millisecond)
-		c.chans[id] <- message
+		c.chans[id] <- signal
 	})()
-	return ack
 }
 
 // Our tests rely on the order of [foo, bar, baz] being preserved
@@ -300,10 +285,10 @@ func TestClientAppendLazy(t *testing.T) {
 		go rafts[i].loop()
 	}
 	// Append three bits of data
-	lsnget := make(chan Response, 4)
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "foo"}}
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "bar"}}
-	rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "baz"}}
+	lsnget := make(chan ClientAppendResponse, 4)
+	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{data: "baz", ack: lsnget}
 
 	data := make([]string, 3)
 	commit := <-rafts[1].CommitCh

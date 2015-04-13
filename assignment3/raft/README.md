@@ -12,11 +12,11 @@ rafts := MakeRafts(5) // 5 is hardcoded for now
 for i := 0; i < 5; i++ {
     go rafts[i].loop() // set up event loop
 }
-lsnget := make(chan Response, 1)
+lsnget := make(chan ClientAppendResponse, 1)
 // Send an Append event to the leader
-rafts[0].EventCh <- ChanMessage{lsnget, ClientAppendEvent{data: "foo"}}
+rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
 // Record the lsn
-lsn := (<-lsnget).(ClientAppendResponse).Lsn
+lsn := (<-lsnget).Lsn
 
 commit := <-rafts[1].CommitCh
 fmt.Printf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
@@ -32,15 +32,15 @@ The first two will disconnect and reconnect the server from the network, and the
 All the events that can be sent (see [documentation](https://godoc.org/github.com/Manishearth/cs733/assignment3/raft) for details on their contents):
 
  - `TimeoutEvent`
- - `ClientAppendEvent` (returns `ClientAppendResponse`)
+ - `ClientAppendEvent` (returns `ClientAppendResponse` through the internal `ack` channel)
  - `AppendRPCEvent` (returns `AppendRPCResponse`)
- - `DebugEvent` (returns `DebugResponse`)
+ - `DebugEvent` (returns `DebugResponse` through the internal `ack` channel)
  - `VoteRequestEvent` (returns `VoteResponse`)
  - `HeartBeatEvent`
  - `DisconnectEvent`
  - `ReconnectEvent`
 
-All responses can be sent through the `EventCh` as well
+All responses can be sent through the `EventCh` as well 
 
 To make this work on a network, one will have to replace `ChanCommunicationHelper` with a custom one that uses RPCs under the hood and knows about the mapping of server IP/port to server id. Everything else should stay mostly the same.
 
