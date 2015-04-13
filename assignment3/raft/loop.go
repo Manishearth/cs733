@@ -62,6 +62,7 @@ func (TimeoutEvent) __signalAssert() {}
 // Append data to a leader's log
 // Fails for non-leaders
 type ClientAppendEvent struct {
+	ack  chan ClientAppendResponse
 	data Data
 }
 
@@ -87,7 +88,9 @@ type AppendRPCEvent struct {
 
 func (AppendRPCEvent) __signalAssert() {}
 
-type DebugEvent struct{}
+type DebugEvent struct {
+	ack chan DebugResponse
+}
 
 func (DebugEvent) __signalAssert() {}
 
@@ -114,12 +117,12 @@ func (AppendRPCResponse) __responseAssert() {}
 
 func (raft *RaftServer) follower() State {
 	// Start a timer to timeout the follower
-	timer := time.AfterFunc(time.Duration(500+rand.Intn(100))*time.Millisecond, func() { raft.EventCh <- ChanMessage{make(chan Response), TimeoutEvent{}} })
+	timer := time.AfterFunc(time.Duration(500+rand.Intn(100))*time.Millisecond, func() { raft.EventCh <- TimeoutEvent{} })
 Loop:
 	for event := range raft.EventCh {
-		switch event.signal.(type) {
+		switch event.(type) {
 		case DebugEvent:
-			event.ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+			event.(DebugEvent).ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
 		case DisconnectEvent:
 			return Disconnected{}
 		case TimeoutEvent:
@@ -130,10 +133,10 @@ Loop:
 		case VoteRequestEvent:
 			// The network seems alive, reset timer
 			timer.Reset(time.Duration(500+rand.Intn(100)) * time.Millisecond)
-			msg := event.signal.(VoteRequestEvent)
+			msg := event.(VoteRequestEvent)
 			if msg.term < raft.Term {
 				// Our term is better
-				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
 				continue Loop
 			}
 			if msg.term > raft.Term {
@@ -143,35 +146,35 @@ Loop:
 			}
 			if raft.VotedFor != -1 {
 				// We already voted
-				event.ack <- VoteResponse{term: raft.Term, voteGranted: false, voterId: raft.Id}
+				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
 				continue Loop
 			}
 			if len(raft.Log) > 0 {
 				if msg.lastLogTerm < raft.Log[len(raft.Log)-1].Term() {
 					// Our log has better entries
-					event.ack <- VoteResponse{term: raft.Term, voteGranted: false, voterId: raft.Id}
+					raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
 					continue Loop
 				}
 				if msg.lastLogTerm == raft.Log[len(raft.Log)-1].Term() {
 					if int(msg.lastLogIndex) < len(raft.Log)-1 {
 						// Our log has more entries
-						event.ack <- VoteResponse{term: raft.Term, voteGranted: false, voterId: raft.Id}
+						raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
 						continue Loop
 					}
 				}
 			}
 			// If we reach this far, we are behind on the log and should vote
-			event.ack <- VoteResponse{term: raft.Term, voteGranted: true, voterId: raft.Id}
+			raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: true, voterId: raft.Id}, msg.candidateId)
 			raft.VotedFor = int(msg.candidateId)
 		case ClientAppendEvent:
-			event.ack <- ClientAppendResponse{false, Lsn(0)}
+			event.(ClientAppendEvent).ack <- ClientAppendResponse{false, Lsn(0)}
 		case AppendRPCEvent:
 			// The network seems alive, reset timer
 			timer.Reset(time.Duration(500+rand.Intn(100)) * time.Millisecond)
-			msg := event.signal.(AppendRPCEvent)
+			msg := event.(AppendRPCEvent)
 			if msg.term < raft.Term {
 				// Our term is better
-				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
+				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
 				continue Loop
 			} else if raft.Term < msg.term {
 				// Update to their term
@@ -180,13 +183,13 @@ Loop:
 			}
 			if len(raft.Log)-1 < msg.prevLogIndex {
 				// We're behind on their expectations of log size
-				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
+				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
 				continue Loop
 			}
 			if len(raft.Log) > 0 {
 				if raft.Log[len(raft.Log)-1].Term() != msg.prevLogTerm {
 					// We're behind on their expectations of log term
-					event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
+					raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
 					continue Loop
 				}
 			}
@@ -219,8 +222,9 @@ Loop:
 				}
 				raft.CommitIndex = lastCommitNew
 			}
-			event.ack <- AppendRPCResponse{raft.Term, true, raft.Id, msg.prevLogIndex, uint(len(msg.entries))}
+			raft.Network.Send(AppendRPCResponse{raft.Term, true, raft.Id, msg.prevLogIndex, uint(len(msg.entries))}, msg.leaderId)
 		default:
+			//
 		}
 
 	}
@@ -260,38 +264,39 @@ func (raft *RaftServer) candidate() State {
 			go raft.voteRequest(raft.Term, uint(i), len(raft.Log)-1, lastLogTerm)
 		}
 	}
-	// Set a random timeout for the candicate state
-	timer := time.AfterFunc(time.Duration(150+rand.Intn(150))*time.Millisecond, func() { raft.EventCh <- ChanMessage{make(chan Response), TimeoutEvent{}} })
+	// Set a random timeout for the candidate state
+	timer := time.AfterFunc(time.Duration(150+rand.Intn(150))*time.Millisecond, func() { raft.EventCh <- TimeoutEvent{} })
 Loop:
 	for event := range raft.EventCh {
-		switch event.signal.(type) {
+		switch event.(type) {
 		case TimeoutEvent:
 			timer.Stop()
 			return Follower{}
 		case DebugEvent:
-			event.ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+			event.(DebugEvent).ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
 		case DisconnectEvent:
 			return Disconnected{}
 		case VoteRequestEvent:
 			timer.Reset(time.Duration(150+rand.Intn(150)) * time.Millisecond)
-			msg := event.signal.(VoteRequestEvent)
+			msg := event.(VoteRequestEvent)
 			if raft.Term >= msg.term {
 				// They're on a lower term, deny
-				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
 			} else {
 				// They're on a higher term, vote for them and update self
 				raft.Term = msg.term
-				event.ack <- VoteResponse{term: raft.Term, voteGranted: true}
+				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: true}, msg.candidateId)
 				raft.VotedFor = int(msg.candidateId)
 				return Follower{}
 			}
 		case AppendRPCEvent:
-			event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
+			msg := event.(AppendRPCEvent)
+			raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
 		case ClientAppendEvent:
-			event.ack <- ClientAppendResponse{false, Lsn(0)}
+			event.(ClientAppendEvent).ack <- ClientAppendResponse{false, Lsn(0)}
 		case VoteResponse:
 			timer.Reset(time.Duration(150+rand.Intn(150)) * time.Millisecond)
-			msg := event.signal.(VoteResponse)
+			msg := event.(VoteResponse)
 			if msg.term != raft.Term {
 				// Not the votes we are looking for
 				continue Loop
@@ -330,23 +335,11 @@ Loop:
 }
 
 func (raft *RaftServer) voteRequest(term uint, id uint, lastLogIndex int, lastLogTerm uint) {
-	ack := raft.Network.Send(VoteRequestEvent{candidateId: raft.Id, term: term, lastLogIndex: lastLogIndex, lastLogTerm: lastLogTerm}, id)
-	resp := <-ack
-	// if term changed, the response was received too late. bail.
-	if raft.Term != term {
-		return
-	}
-	raft.EventCh <- ChanMessage{make(chan Response), resp}
+	raft.Network.Send(VoteRequestEvent{candidateId: raft.Id, term: term, lastLogIndex: lastLogIndex, lastLogTerm: lastLogTerm}, id)
 }
 
 func (raft *RaftServer) appendRequest(term uint, id uint, prevLogIndex int, prevLogTerm uint, entries []LogEntry, leaderCommit int) {
-	ack := raft.Network.Send(AppendRPCEvent{term: term, leaderId: raft.Id, prevLogIndex: prevLogIndex, prevLogTerm: prevLogTerm, entries: entries, leaderCommit: leaderCommit}, id)
-	resp := <-ack
-	// if term changed, the response was received too late. bail.
-	if raft.Term != term {
-		return
-	}
-	raft.EventCh <- ChanMessage{make(chan Response), resp}
+	raft.Network.Send(AppendRPCEvent{term: term, leaderId: raft.Id, prevLogIndex: prevLogIndex, prevLogTerm: prevLogTerm, entries: entries, leaderCommit: leaderCommit}, id)
 }
 
 // Instructs leader to send out heartbeats
@@ -370,7 +363,7 @@ func (raft *RaftServer) leader() State {
 		for {
 			select {
 			case <-heartbeat.C:
-				raft.EventCh <- ChanMessage{make(chan Response, 1), HeartBeatEvent{}}
+				raft.EventCh <- HeartBeatEvent{}
 			case <-quit:
 				heartbeat.Stop()
 				return
@@ -379,7 +372,7 @@ func (raft *RaftServer) leader() State {
 	}()
 
 	for event := range raft.EventCh {
-		switch event.signal.(type) {
+		switch event.(type) {
 		case DisconnectEvent:
 			quit <- true
 			return Disconnected{}
@@ -404,16 +397,16 @@ func (raft *RaftServer) leader() State {
 				}
 			}
 		case DebugEvent:
-			event.ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+			event.(DebugEvent).ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
 		case VoteRequestEvent:
-			msg := event.signal.(VoteRequestEvent)
+			msg := event.(VoteRequestEvent)
 			if raft.Term >= msg.term {
 				// Deny if we're on the same footing or a better term
-				event.ack <- VoteResponse{term: raft.Term, voteGranted: false}
+				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
 			} else {
 				// If it's on a better term, grant vote and become follower
 				raft.Term = msg.term
-				event.ack <- VoteResponse{term: raft.Term, voteGranted: true}
+				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: true}, msg.candidateId)
 				raft.VotedFor = int(msg.candidateId)
 				quit <- true
 				return Follower{}
@@ -421,15 +414,15 @@ func (raft *RaftServer) leader() State {
 		case AppendRPCEvent:
 			// If we get an AppendRequestRPC from someone with a better term
 			// deny it for now, but become a follower
-			msg := event.signal.(AppendRPCEvent)
+			msg := event.(AppendRPCEvent)
 			if raft.Term < msg.term {
 				raft.Term = msg.term
-				event.ack <- AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}
+				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
 				quit <- true
 				return Follower{}
 			}
 		case ClientAppendEvent:
-			msg := event.signal.(ClientAppendEvent)
+			msg := event.(ClientAppendEvent)
 			lsn := Lsn(0)
 			if len(raft.Log) > 0 {
 				// Lsn should be 0 or `(lsn of last log entry) + 1`
@@ -437,9 +430,9 @@ func (raft *RaftServer) leader() State {
 			}
 			lsn++
 			raft.Log = append(raft.Log, StringEntry{lsn: lsn, data: msg.data, term: raft.Term})
-			event.ack <- ClientAppendResponse{true, lsn}
+			msg.ack <- ClientAppendResponse{true, lsn}
 		case AppendRPCResponse:
-			msg := event.signal.(AppendRPCResponse)
+			msg := event.(AppendRPCResponse)
 			id := msg.followerId
 			if !msg.success {
 				// message failed, decrement nextIndex
@@ -498,7 +491,7 @@ func (ReconnectEvent) __signalAssert()  {}
 
 func (raft *RaftServer) disconnected() State {
 	for event := range raft.EventCh {
-		switch event.signal.(type) {
+		switch event.(type) {
 		case ReconnectEvent:
 			return Follower{}
 		default:

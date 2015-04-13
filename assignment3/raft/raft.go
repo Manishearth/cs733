@@ -45,7 +45,7 @@ func (e StringEntry) Term() uint {
 type RaftServer struct {
 	Id          uint
 	CommitCh    chan LogEntry       // Committed entries go here
-	EventCh     chan ChanMessage    // RPCs, RPC responses, and other external messages go here
+	EventCh     chan Signal         // RPCs, RPC responses, and other external messages go here
 	Network     CommunicationHelper // Information about the network
 	Log         []LogEntry
 	Term        uint
@@ -62,7 +62,7 @@ type State interface {
 // RPC-like async interface for sending a signal to another
 // Raft server
 type CommunicationHelper interface {
-	Send(signal Signal, id uint) chan Response
+	Send(signal Signal, id uint)
 }
 
 type Signal interface {
@@ -86,14 +86,11 @@ type ChanMessage struct {
 // for a channel-based network. Can be swapped with
 // an RPC framework
 type ChanCommunicationHelper struct {
-	chans []chan ChanMessage
+	chans []chan Signal
 }
 
-func (c ChanCommunicationHelper) Send(signal Signal, id uint) chan Response {
-	ack := make(chan Response, 1)
-	message := ChanMessage{ack, signal}
-	c.chans[id] <- message
-	return ack
+func (c ChanCommunicationHelper) Send(signal Signal, id uint) {
+	c.chans[id] <- signal
 }
 
 // Makes a number of raft servers as a single network
@@ -102,9 +99,9 @@ func MakeRafts(count uint) []RaftServer {
 	if count != 5 {
 		panic("Current code is hardcoded for 5 servers")
 	}
-	network := make([]chan ChanMessage, count)
+	network := make([]chan Signal, count)
 	for i := uint(0); i < count; i++ {
-		network[i] = make(chan ChanMessage, 1000)
+		network[i] = make(chan Signal, 1000)
 	}
 
 	servers := make([]RaftServer, count)
