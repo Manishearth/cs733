@@ -14,7 +14,7 @@ func TestInternalAppend(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		// We don't actually need the network here, just
 		// the first follower
-		go rafts[i].loop()
+		go rafts[i].Loop()
 	}
 	entry := make([]LogEntry, 1)
 	entry[0] = StringEntry{lsn: 0, data: "foo", term: 0}
@@ -40,7 +40,7 @@ func TestInternalAppend(t *testing.T) {
 // into this and introduce brokenness to test fault-tolerance
 func testClientAppend(t *testing.T, rafts []RaftServer) {
 	for i := 0; i < 5; i++ {
-		go rafts[i].loop()
+		go rafts[i].Loop()
 	}
 	// Append three bits of data
 	lsnget := make(chan ClientAppendResponse, 4)
@@ -80,7 +80,7 @@ func testClientAppendDisconnect(t *testing.T, rafts []RaftServer) {
 	rafts[3].EventCh <- DisconnectEvent{}
 	rafts[4].EventCh <- DisconnectEvent{}
 	for i := 0; i < 5; i++ {
-		go rafts[i].loop()
+		go rafts[i].Loop()
 	}
 	lsnget := make(chan ClientAppendResponse, 4)
 	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
@@ -118,7 +118,7 @@ func testClientAppendDisconnectFail(t *testing.T, rafts []RaftServer) {
 	// We lose quorum here
 	rafts[2].EventCh <- DisconnectEvent{}
 	for i := 0; i < 5; i++ {
-		go rafts[i].loop()
+		go rafts[i].Loop()
 	}
 	lsnget := make(chan ClientAppendResponse, 4)
 	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
@@ -144,7 +144,7 @@ func testElection(t *testing.T, rafts []RaftServer) {
 	// Kill the leader
 	rafts[0].EventCh <- DisconnectEvent{}
 	for i := 0; i < 5; i++ {
-		go rafts[i].loop()
+		go rafts[i].Loop()
 	}
 	// Wait sufficient time for the election to happen
 	//time.Sleep(time.Duration(multiplier) * time.Second)
@@ -233,6 +233,8 @@ func (c EvilChanCommunicationHelper) Send(signal Signal, id uint) {
 	}
 	c.chans[id] <- signal
 }
+func (c EvilChanCommunicationHelper) Setup() {
+}
 
 func TestClientAppendEvil(t *testing.T) {
 	rafts := MakeRafts(5)
@@ -274,6 +276,9 @@ func (c LazyChanCommunicationHelper) Send(signal Signal, id uint) {
 	})()
 }
 
+func (c LazyChanCommunicationHelper) Setup() {
+}
+
 // Our tests rely on the order of [foo, bar, baz] being preserved
 // which need not always happen with a lazy send, so we need to rewrite a test
 func TestClientAppendLazy(t *testing.T) {
@@ -282,7 +287,7 @@ func TestClientAppendLazy(t *testing.T) {
 		rafts[i].Network = LazyChanCommunicationHelper{chans: rafts[i].Network.(ChanCommunicationHelper).chans, t: t}
 	}
 	for i := 0; i < 5; i++ {
-		go rafts[i].loop()
+		go rafts[i].Loop()
 	}
 	// Append three bits of data
 	lsnget := make(chan ClientAppendResponse, 4)

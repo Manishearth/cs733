@@ -2,7 +2,12 @@
 package raft
 
 import (
+	"fmt"
+	"log"
 	"math/rand"
+	"net"
+	"net/http"
+	"net/rpc"
 	"time"
 )
 
@@ -52,6 +57,7 @@ type RaftServer struct {
 	VotedFor    int
 	CommitIndex int
 	LastApplied uint
+	N           uint // number of servers
 }
 
 // Interface for specifying a state
@@ -63,6 +69,7 @@ type State interface {
 // Raft server
 type CommunicationHelper interface {
 	Send(signal Signal, id uint)
+	Setup() // In case it needs to register rpcs
 }
 
 type Signal interface {
@@ -93,12 +100,12 @@ func (c ChanCommunicationHelper) Send(signal Signal, id uint) {
 	c.chans[id] <- signal
 }
 
+func (c ChanCommunicationHelper) Setup() {
+}
+
 // Makes a number of raft servers as a single network
 func MakeRafts(count uint) []RaftServer {
 	rand.Seed(time.Now().UTC().UnixNano())
-	if count != 5 {
-		panic("Current code is hardcoded for 5 servers")
-	}
 	network := make([]chan Signal, count)
 	for i := uint(0); i < count; i++ {
 		network[i] = make(chan Signal, 1000)
@@ -119,7 +126,49 @@ func MakeRafts(count uint) []RaftServer {
 			VotedFor:    -1,
 			CommitIndex: -1,
 			LastApplied: 0,
+			N:           count,
 		}
 	}
 	return servers
+}
+
+// RPC based network communication helper
+// To be used when different raft instances are spread out across servers
+// This will *not* handle restarting the raft instance after a server crash,
+// use a cronjob or setup job to do somethng similar
+type NetCommunicationHelper struct {
+	Id      uint          // Self id
+	Hosts   []string      // Hostnames of all servers
+	Ports   []uint        // Ports of all servers
+	EventCh chan<- Signal // Handle to parent raft event chan
+}
+
+func (c NetCommunicationHelper) Send(signal Signal, id uint) {
+	client, err := rpc.DialHTTP("tcp", fmt.Sprintf("%v:%v", c.Hosts[id], c.Ports[id]))
+	if err != nil {
+		// Server unavailable
+		// Nothing we need to worry about, raft will find out anyway
+		return
+	}
+	var reply bool
+	client.Call("NetCommunicationHelper.RecvRPC", &signal, &reply)
+	// We don't care about the RPC reply
+}
+
+func (c NetCommunicationHelper) Setup() {
+	rpc.Register(c)
+	rpc.HandleHTTP()
+	l, e := net.Listen("tcp", fmt.Sprintf(":%v", c.Ports[c.Id]))
+	if e != nil {
+		// Someone else is using the port, or something
+		// We failed to setup, so we should just crash
+		log.Fatal("listen error:", e)
+	}
+	go http.Serve(l, nil)
+}
+
+func (c *NetCommunicationHelper) RecvRPC(arg *Signal, reply *bool) error {
+	c.EventCh <- *arg
+	*reply = true
+	return nil
 }

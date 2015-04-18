@@ -1,7 +1,7 @@
 package raft
 
 import (
-	"fmt"
+	"log"
 	"math/rand"
 	"sort"
 	"time"
@@ -31,14 +31,14 @@ type Disconnected struct {
 func (Leader) __stateAssert()       {}
 func (Disconnected) __stateAssert() {}
 
-func (raft *RaftServer) loop() {
+func (raft *RaftServer) Loop() {
 	state := State(Follower{}) // begin life as a follower
-	if raft.Id == 0 {
+	if raft.Id == 0 && raft.Term == 0 {
 		state = State(Leader{}) // No need to have an election initially
 	}
-
+	raft.Network.Setup()
 	for {
-		fmt.Printf("Server %v is now in state %T with term %v\n", raft.Id, state, raft.Term)
+		log.Printf("Server %v is now in state %T with term %v\n", raft.Id, state, raft.Term)
 		switch state.(type) {
 		case Follower:
 			state = raft.follower()
@@ -179,7 +179,7 @@ Loop:
 			} else if raft.Term < msg.term {
 				// Update to their term
 				raft.Term = msg.term
-				fmt.Printf("Server %v is now in state %T with term %v\n", raft.Id, Follower{}, raft.Term)
+				log.Printf("Server %v is now in state %T with term %v\n", raft.Id, Follower{}, raft.Term)
 			}
 			if len(raft.Log)-1 < msg.prevLogIndex {
 				// We're behind on their expectations of log size
@@ -252,13 +252,13 @@ func (VoteResponse) __signalAssert()   {}
 func (VoteResponse) __responseAssert() {}
 
 func (raft *RaftServer) candidate() State {
-	votes := make([]uint, 5) // 2 = yes, 1 = no, 0 = not voted
-	votes[raft.Id] = 2       // vote for self
+	votes := make([]uint, raft.N) // 2 = yes, 1 = no, 0 = not voted
+	votes[raft.Id] = 2            // vote for self
 	lastLogTerm := uint(0)
 	if len(raft.Log) > 0 {
 		lastLogTerm = raft.Log[uint(len(raft.Log)-1)].Term()
 	}
-	for i := 0; i < 5; i++ {
+	for i := uint(0); i < raft.N; i++ {
 		if uint(i) != raft.Id {
 			// ask everyone for votes
 			go raft.voteRequest(raft.Term, uint(i), len(raft.Log)-1, lastLogTerm)
@@ -308,20 +308,20 @@ Loop:
 			} else {
 				votes[msg.voterId] = 1
 			}
-			yescount := 0
-			nocount := 0
-			for i := 0; i < 5; i++ {
+			yescount := uint(0)
+			nocount := uint(0)
+			for i := uint(0); i < raft.N; i++ {
 				if votes[i] == 2 {
 					yescount++
 				} else if votes[i] == 3 {
 					nocount++
 				}
 			}
-			if yescount > 2 {
+			if yescount > raft.N/2 {
 				// We have a majority
 				timer.Stop()
 				return Leader{}
-			} else if nocount > 2 {
+			} else if nocount > raft.N/2 {
 				// We have a majority of no votes, give up
 				timer.Stop()
 				// raft.Term++
@@ -348,9 +348,9 @@ type HeartBeatEvent struct{}
 func (HeartBeatEvent) __signalAssert() {}
 
 func (raft *RaftServer) leader() State {
-	nextIndex := make([]uint, 5)
-	matchIndex := make([]int, 5)
-	for i := 0; i < 5; i++ {
+	nextIndex := make([]uint, raft.N)
+	matchIndex := make([]int, raft.N)
+	for i := uint(0); i < raft.N; i++ {
 		nextIndex[i] = uint(len(raft.Log))
 		matchIndex[i] = -1
 	}
@@ -377,7 +377,7 @@ func (raft *RaftServer) leader() State {
 			quit <- true
 			return Disconnected{}
 		case HeartBeatEvent:
-			for i := 0; i < 5; i++ {
+			for i := uint(0); i < raft.N; i++ {
 				if uint(i) == raft.Id {
 					// ignore self; we already know that self is up to date
 					continue
@@ -454,15 +454,15 @@ func (raft *RaftServer) leader() State {
 			}
 
 			// make a copy so we can sort it
-			matchCopy := make([]int, 5)
+			matchCopy := make([]int, raft.N)
 			copy(matchCopy, matchIndex)
 			sort.IntSlice(matchCopy).Sort()
 			// If there exists an N such that N > commitIndex, a majority
 			// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
 			// set commitIndex = N .
 		Inner:
-			for i := 3; i >= 0; i-- {
-				// First three elements of sorted matchindex
+			for i := int(raft.N/2 + 1); i >= 0; i-- {
+				// First N/2+1 of sorted matchindex
 				// slice all are less than or equal to a majority of
 				// matchindices
 				if matchCopy[i] > raft.CommitIndex {
