@@ -10,7 +10,7 @@ Sample usage:
 ```go
 rafts := MakeRafts(5) // 5 is hardcoded for now
 for i := 0; i < 5; i++ {
-    go rafts[i].loop() // set up event loop
+    go rafts[i].Loop() // set up event loop
 }
 lsnget := make(chan ClientAppendResponse, 1)
 // Send an Append event to the leader

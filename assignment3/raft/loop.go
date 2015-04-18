@@ -62,15 +62,16 @@ func (TimeoutEvent) __signalAssert() {}
 // Append data to a leader's log
 // Fails for non-leaders
 type ClientAppendEvent struct {
-	ack  chan ClientAppendResponse
-	data Data
+	Ack  chan ClientAppendResponse
+	Data Data
 }
 
 func (ClientAppendEvent) __signalAssert() {}
 
 type ClientAppendResponse struct {
-	Queued bool // was it queued?
-	Lsn    Lsn  // log sequence number for entry
+	Queued   bool // was it queued?
+	Lsn      Lsn  // log sequence number for entry
+	LeaderId uint // Leader ID for redirection
 }
 
 func (ClientAppendResponse) __signalAssert()   {}
@@ -78,18 +79,18 @@ func (ClientAppendResponse) __responseAssert() {}
 
 // AppendRequestRPC
 type AppendRPCEvent struct {
-	term         uint       // the term
-	leaderId     uint       // who the leader is
-	prevLogIndex int        // log index before the entries
-	prevLogTerm  uint       // term of last log entry before the sent entries
-	entries      []LogEntry // entries being sent
-	leaderCommit int        // commit index of leader
+	Term         uint       // the term
+	LeaderId     uint       // who the leader is
+	PrevLogIndex int        // log index before the entries
+	PrevLogTerm  uint       // term of last log entry before the sent entries
+	Entries      []LogEntry // entries being sent
+	LeaderCommit int        // commit index of leader
 }
 
 func (AppendRPCEvent) __signalAssert() {}
 
 type DebugEvent struct {
-	ack chan DebugResponse
+	Ack chan DebugResponse
 }
 
 func (DebugEvent) __signalAssert() {}
@@ -105,11 +106,11 @@ func (DebugResponse) __responseAssert() {}
 
 // Response to AppendRequestRPC
 type AppendRPCResponse struct {
-	term         uint // follower term
-	success      bool // did the AppendRequestRPC succeed?
-	followerId   uint // id of follower
-	prevLogIndex int  // last log index before append
-	count        uint // amount of entries appended
+	Term         uint // follower term
+	Success      bool // did the AppendRequestRPC succeed?
+	FollowerId   uint // id of follower
+	PrevLogIndex int  // last log index before append
+	Count        uint // amount of entries appended
 }
 
 func (AppendRPCResponse) __signalAssert()   {}
@@ -122,99 +123,103 @@ Loop:
 	for event := range raft.EventCh {
 		switch event.(type) {
 		case DebugEvent:
-			event.(DebugEvent).ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+			event.(DebugEvent).Ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
 		case DisconnectEvent:
 			return Disconnected{}
 		case TimeoutEvent:
 			// In case of timeouts, stop all existing timers, and become a candidate
 			timer.Stop()
 			raft.Term++
+			raft.Persistence.Save(raft)
 			return Candidate{}
 		case VoteRequestEvent:
 			// The network seems alive, reset timer
 			timer.Reset(time.Duration(500+rand.Intn(100)) * time.Millisecond)
 			msg := event.(VoteRequestEvent)
-			if msg.term < raft.Term {
+			if msg.Term < raft.Term {
 				// Our term is better
-				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
+				raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: false}, msg.CandidateId)
 				continue Loop
 			}
-			if msg.term > raft.Term {
+			if msg.Term > raft.Term {
 				// Their term is better, we should update ourselves
-				raft.Term = msg.term
+				raft.Term = msg.Term
 				raft.VotedFor = -1
+				raft.Persistence.Save(raft)
 			}
 			if raft.VotedFor != -1 {
 				// We already voted
-				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
+				raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: false}, msg.CandidateId)
 				continue Loop
 			}
 			if len(raft.Log) > 0 {
-				if msg.lastLogTerm < raft.Log[len(raft.Log)-1].Term() {
+				if msg.LastLogTerm < raft.Log[len(raft.Log)-1].Term {
 					// Our log has better entries
-					raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
+					raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: false}, msg.CandidateId)
 					continue Loop
 				}
-				if msg.lastLogTerm == raft.Log[len(raft.Log)-1].Term() {
-					if int(msg.lastLogIndex) < len(raft.Log)-1 {
+				if msg.LastLogTerm == raft.Log[len(raft.Log)-1].Term {
+					if int(msg.LastLogIndex) < len(raft.Log)-1 {
 						// Our log has more entries
-						raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
+						raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: false}, msg.CandidateId)
 						continue Loop
 					}
 				}
 			}
 			// If we reach this far, we are behind on the log and should vote
-			raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: true, voterId: raft.Id}, msg.candidateId)
-			raft.VotedFor = int(msg.candidateId)
+			raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: true, VoterId: raft.Id}, msg.CandidateId)
+			raft.VotedFor = int(msg.CandidateId)
+			raft.Persistence.Save(raft)
 		case ClientAppendEvent:
-			event.(ClientAppendEvent).ack <- ClientAppendResponse{false, Lsn(0)}
+			event.(ClientAppendEvent).Ack <- ClientAppendResponse{false, Lsn(0), raft.Leader}
 		case AppendRPCEvent:
 			// The network seems alive, reset timer
 			timer.Reset(time.Duration(500+rand.Intn(100)) * time.Millisecond)
 			msg := event.(AppendRPCEvent)
-			if msg.term < raft.Term {
+			if msg.Term < raft.Term {
 				// Our term is better
-				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
+				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.LeaderId)
 				continue Loop
-			} else if raft.Term < msg.term {
+			} else if raft.Term < msg.Term {
 				// Update to their term
-				raft.Term = msg.term
+				raft.Term = msg.Term
 				log.Printf("Server %v is now in state %T with term %v\n", raft.Id, Follower{}, raft.Term)
 			}
-			if len(raft.Log)-1 < msg.prevLogIndex {
+			if len(raft.Log)-1 < msg.PrevLogIndex {
 				// We're behind on their expectations of log size
-				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
+				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.LeaderId)
 				continue Loop
 			}
 			if len(raft.Log) > 0 {
-				if raft.Log[len(raft.Log)-1].Term() != msg.prevLogTerm {
+				if raft.Log[len(raft.Log)-1].Term != msg.PrevLogTerm {
 					// We're behind on their expectations of log term
-					raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
+					raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.LeaderId)
 					continue Loop
 				}
 			}
+			raft.Leader = msg.LeaderId
 			delete := false // should we delete entries?
-			for i := 1; i <= len(msg.entries); i++ {
-				if len(raft.Log) > msg.prevLogIndex+i {
-					if raft.Log[msg.prevLogIndex+i].Term() != msg.entries[i-1].Term() {
+			for i := 1; i <= len(msg.Entries); i++ {
+				if len(raft.Log) > msg.PrevLogIndex+i {
+					if raft.Log[msg.PrevLogIndex+i].Term != msg.Entries[i-1].Term {
 						// uh oh, entries mismatch, we should clean it up
 						delete = true
-						raft.Log[msg.prevLogIndex+i] = msg.entries[i-1]
+						raft.Log[msg.PrevLogIndex+i] = msg.Entries[i-1]
 					}
 				} else {
 					// Append new entries to the log
-					raft.Log = append(raft.Log, msg.entries[i-1])
+					raft.Log = append(raft.Log, msg.Entries[i-1])
 				}
 
 			}
-			if delete == true && len(raft.Log) > msg.prevLogIndex+len(msg.entries) {
+			if delete == true && len(raft.Log) > msg.PrevLogIndex+len(msg.Entries) {
 				// Truncate any entries past what we already overwrote
-				raft.Log = raft.Log[:msg.prevLogIndex+len(msg.entries)+1]
+				raft.Log = raft.Log[:msg.PrevLogIndex+len(msg.Entries)+1]
 			}
 			if len(raft.Log) > 0 {
-				lastCommit := min(raft.CommitIndex, msg.prevLogIndex+len(msg.entries))
-				lastCommitNew := min(int(msg.leaderCommit), len(raft.Log)-1)
-				if msg.leaderCommit > lastCommit {
+				lastCommit := min(raft.CommitIndex, msg.PrevLogIndex+len(msg.Entries))
+				lastCommitNew := min(int(msg.LeaderCommit), len(raft.Log)-1)
+				if msg.LeaderCommit > lastCommit {
 					// We have new things to commit; commit them
 					for i := lastCommit + 1; i <= lastCommitNew; i++ {
 						raft.CommitCh <- raft.Log[i]
@@ -222,7 +227,8 @@ Loop:
 				}
 				raft.CommitIndex = lastCommitNew
 			}
-			raft.Network.Send(AppendRPCResponse{raft.Term, true, raft.Id, msg.prevLogIndex, uint(len(msg.entries))}, msg.leaderId)
+			raft.Network.Send(AppendRPCResponse{raft.Term, true, raft.Id, msg.PrevLogIndex, uint(len(msg.Entries))}, msg.LeaderId)
+			raft.Persistence.Save(raft)
 		default:
 			//
 		}
@@ -233,19 +239,19 @@ Loop:
 
 // VoteRequestRPC
 type VoteRequestEvent struct {
-	candidateId  uint // candidate requesting vote
-	term         uint // term of candidate
-	lastLogIndex int  // index of last log entry of candidate
-	lastLogTerm  uint // term of last log entry of candidate
+	CandidateId  uint // candidate requesting vote
+	Term         uint // term of candidate
+	LastLogIndex int  // index of last log entry of candidate
+	LastLogTerm  uint // term of last log entry of candidate
 }
 
 func (VoteRequestEvent) __signalAssert() {}
 
 // Response to VoteRequestRPC
 type VoteResponse struct {
-	term        uint // term of voter
-	voteGranted bool // was the vote granted?
-	voterId     uint // id of voter
+	Term        uint // term of voter
+	VoteGranted bool // was the vote granted?
+	VoterId     uint // id of voter
 }
 
 func (VoteResponse) __signalAssert()   {}
@@ -256,7 +262,7 @@ func (raft *RaftServer) candidate() State {
 	votes[raft.Id] = 2            // vote for self
 	lastLogTerm := uint(0)
 	if len(raft.Log) > 0 {
-		lastLogTerm = raft.Log[uint(len(raft.Log)-1)].Term()
+		lastLogTerm = raft.Log[uint(len(raft.Log)-1)].Term
 	}
 	for i := uint(0); i < raft.N; i++ {
 		if uint(i) != raft.Id {
@@ -273,40 +279,41 @@ Loop:
 			timer.Stop()
 			return Follower{}
 		case DebugEvent:
-			event.(DebugEvent).ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+			event.(DebugEvent).Ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
 		case DisconnectEvent:
 			return Disconnected{}
 		case VoteRequestEvent:
 			timer.Reset(time.Duration(150+rand.Intn(150)) * time.Millisecond)
 			msg := event.(VoteRequestEvent)
-			if raft.Term >= msg.term {
+			if raft.Term >= msg.Term {
 				// They're on a lower term, deny
-				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
+				raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: false}, msg.CandidateId)
 			} else {
 				// They're on a higher term, vote for them and update self
-				raft.Term = msg.term
-				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: true}, msg.candidateId)
-				raft.VotedFor = int(msg.candidateId)
+				raft.Term = msg.Term
+				raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: true}, msg.CandidateId)
+				raft.VotedFor = int(msg.CandidateId)
+				raft.Persistence.Save(raft)
 				return Follower{}
 			}
 		case AppendRPCEvent:
 			msg := event.(AppendRPCEvent)
-			raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
+			raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.LeaderId)
 		case ClientAppendEvent:
-			event.(ClientAppendEvent).ack <- ClientAppendResponse{false, Lsn(0)}
+			event.(ClientAppendEvent).Ack <- ClientAppendResponse{false, Lsn(0), raft.Leader}
 		case VoteResponse:
 			timer.Reset(time.Duration(150+rand.Intn(150)) * time.Millisecond)
 			msg := event.(VoteResponse)
-			if msg.term != raft.Term {
+			if msg.Term != raft.Term {
 				// Not the votes we are looking for
 				continue Loop
 			}
 
 			// record the vote
-			if msg.voteGranted {
-				votes[msg.voterId] = 2
+			if msg.VoteGranted {
+				votes[msg.VoterId] = 2
 			} else {
-				votes[msg.voterId] = 1
+				votes[msg.VoterId] = 1
 			}
 			yescount := uint(0)
 			nocount := uint(0)
@@ -335,11 +342,11 @@ Loop:
 }
 
 func (raft *RaftServer) voteRequest(term uint, id uint, lastLogIndex int, lastLogTerm uint) {
-	raft.Network.Send(VoteRequestEvent{candidateId: raft.Id, term: term, lastLogIndex: lastLogIndex, lastLogTerm: lastLogTerm}, id)
+	raft.Network.Send(VoteRequestEvent{CandidateId: raft.Id, Term: term, LastLogIndex: lastLogIndex, LastLogTerm: lastLogTerm}, id)
 }
 
 func (raft *RaftServer) appendRequest(term uint, id uint, prevLogIndex int, prevLogTerm uint, entries []LogEntry, leaderCommit int) {
-	raft.Network.Send(AppendRPCEvent{term: term, leaderId: raft.Id, prevLogIndex: prevLogIndex, prevLogTerm: prevLogTerm, entries: entries, leaderCommit: leaderCommit}, id)
+	raft.Network.Send(AppendRPCEvent{Term: term, LeaderId: raft.Id, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm, Entries: entries, LeaderCommit: leaderCommit}, id)
 }
 
 // Instructs leader to send out heartbeats
@@ -387,7 +394,7 @@ func (raft *RaftServer) leader() State {
 					prevLogTerm := raft.Term
 					newEntries := make([]LogEntry, 0)
 					if len(raft.Log) > 0 && nextIndex[i] > 0 {
-						prevLogTerm = raft.Log[nextIndex[i]-1].Term()
+						prevLogTerm = raft.Log[nextIndex[i]-1].Term
 					}
 					if uint(len(raft.Log)) > nextIndex[i] {
 						newEntries = raft.Log[nextIndex[i]:]
@@ -397,27 +404,28 @@ func (raft *RaftServer) leader() State {
 				}
 			}
 		case DebugEvent:
-			event.(DebugEvent).ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
+			event.(DebugEvent).Ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
 		case VoteRequestEvent:
 			msg := event.(VoteRequestEvent)
-			if raft.Term >= msg.term {
+			if raft.Term >= msg.Term {
 				// Deny if we're on the same footing or a better term
-				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: false}, msg.candidateId)
+				raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: false}, msg.CandidateId)
 			} else {
 				// If it's on a better term, grant vote and become follower
-				raft.Term = msg.term
-				raft.Network.Send(VoteResponse{term: raft.Term, voteGranted: true}, msg.candidateId)
-				raft.VotedFor = int(msg.candidateId)
+				raft.Term = msg.Term
+				raft.Network.Send(VoteResponse{Term: raft.Term, VoteGranted: true}, msg.CandidateId)
+				raft.VotedFor = int(msg.CandidateId)
 				quit <- true
+				raft.Persistence.Save(raft)
 				return Follower{}
 			}
 		case AppendRPCEvent:
 			// If we get an AppendRequestRPC from someone with a better term
 			// deny it for now, but become a follower
 			msg := event.(AppendRPCEvent)
-			if raft.Term < msg.term {
-				raft.Term = msg.term
-				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.leaderId)
+			if raft.Term < msg.Term {
+				raft.Term = msg.Term
+				raft.Network.Send(AppendRPCResponse{raft.Term, false, raft.Id, 0, 0}, msg.LeaderId)
 				quit <- true
 				return Follower{}
 			}
@@ -426,15 +434,16 @@ func (raft *RaftServer) leader() State {
 			lsn := Lsn(0)
 			if len(raft.Log) > 0 {
 				// Lsn should be 0 or `(lsn of last log entry) + 1`
-				lsn = raft.Log[len(raft.Log)-1].Lsn()
+				lsn = raft.Log[len(raft.Log)-1].Lsn
 			}
 			lsn++
-			raft.Log = append(raft.Log, StringEntry{lsn: lsn, data: msg.data, term: raft.Term})
-			msg.ack <- ClientAppendResponse{true, lsn}
+			raft.Log = append(raft.Log, LogEntry{Lsn: lsn, Data: msg.Data, Term: raft.Term})
+			raft.Persistence.Save(raft)
+			msg.Ack <- ClientAppendResponse{true, lsn, raft.Id}
 		case AppendRPCResponse:
 			msg := event.(AppendRPCResponse)
-			id := msg.followerId
-			if !msg.success {
+			id := msg.FollowerId
+			if !msg.Success {
 				// message failed, decrement nextIndex
 				if nextIndex[id] > 0 {
 					nextIndex[id] = nextIndex[id] - 1
@@ -443,14 +452,14 @@ func (raft *RaftServer) leader() State {
 				}
 				continue
 			}
-			if msg.term > raft.Term {
+			if msg.Term > raft.Term {
 				// we're behind
 				quit <- true
 				return Follower{}
 			}
-			if msg.prevLogIndex+int(msg.count)+1 > int(matchIndex[id]) {
+			if msg.PrevLogIndex+int(msg.Count)+1 > int(matchIndex[id]) {
 				// update matchIndex if necessary
-				matchIndex[id] = msg.prevLogIndex + int(msg.count)
+				matchIndex[id] = msg.PrevLogIndex + int(msg.Count)
 			}
 
 			// make a copy so we can sort it
@@ -473,6 +482,7 @@ func (raft *RaftServer) leader() State {
 					break Inner
 				}
 			}
+			raft.Persistence.Save(raft)
 		default:
 
 		}

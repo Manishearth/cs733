@@ -17,20 +17,20 @@ func TestInternalAppend(t *testing.T) {
 		go rafts[i].Loop()
 	}
 	entry := make([]LogEntry, 1)
-	entry[0] = StringEntry{lsn: 0, data: "foo", term: 0}
+	entry[0] = LogEntry{Lsn: 0, Data: "foo", Term: 0}
 	rafts[1].EventCh <- AppendRPCEvent{0, 0, -1, 0, entry, -1}
 	entry = make([]LogEntry, 1)
-	entry[0] = StringEntry{lsn: 0, data: "bar", term: 0}
+	entry[0] = LogEntry{Lsn: 0, Data: "bar", Term: 0}
 	rafts[1].EventCh <- AppendRPCEvent{0, 0, 0, 0, entry, -1}
 	entry = make([]LogEntry, 1)
-	entry[0] = StringEntry{lsn: 0, data: "baz", term: 0}
+	entry[0] = LogEntry{Lsn: 0, Data: "baz", Term: 0}
 	rafts[1].EventCh <- AppendRPCEvent{0, 0, 1, 0, entry, 1}
 	wait := make(chan DebugResponse)
 	rafts[1].EventCh <- DebugEvent{wait}
 	debug := (<-wait)
-	expect(t, string(debug.Log[0].Data()), "foo")
-	expect(t, string(debug.Log[1].Data()), "bar")
-	expect(t, string(debug.Log[2].Data()), "baz")
+	expect(t, string(debug.Log[0].Data), "foo")
+	expect(t, string(debug.Log[1].Data), "bar")
+	expect(t, string(debug.Log[2].Data), "baz")
 	expect_num(t, int(debug.Term), 0)
 	expect_num(t, debug.CommitIndex, 1)
 }
@@ -44,28 +44,28 @@ func testClientAppend(t *testing.T, rafts []RaftServer) {
 	}
 	// Append three bits of data
 	lsnget := make(chan ClientAppendResponse, 4)
-	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "foo", Ack: lsnget}
 	lsn1 := (<-lsnget).Lsn
-	rafts[0].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "bar", Ack: lsnget}
 	lsn2 := (<-lsnget).Lsn
-	rafts[0].EventCh <- ClientAppendEvent{data: "baz", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "baz", Ack: lsnget}
 	lsn3 := (<-lsnget).Lsn
 
 	for i := 1; i < 5; i++ {
 		// Check that the data eventually propagated
 		// with the right lsn
 		commit := <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect_num(t, int(lsn1), int(commit.Lsn()))
-		expect(t, "foo", string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect_num(t, int(lsn1), int(commit.Lsn))
+		expect(t, "foo", string(commit.Data))
 		commit = <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect_num(t, int(lsn2), int(commit.Lsn()))
-		expect(t, "bar", string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect_num(t, int(lsn2), int(commit.Lsn))
+		expect(t, "bar", string(commit.Data))
 		commit = <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect_num(t, int(lsn3), int(commit.Lsn()))
-		expect(t, "baz", string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect_num(t, int(lsn3), int(commit.Lsn))
+		expect(t, "baz", string(commit.Data))
 	}
 }
 
@@ -83,26 +83,26 @@ func testClientAppendDisconnect(t *testing.T, rafts []RaftServer) {
 		go rafts[i].Loop()
 	}
 	lsnget := make(chan ClientAppendResponse, 4)
-	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "foo", Ack: lsnget}
 	lsn1 := (<-lsnget).Lsn
-	rafts[0].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "bar", Ack: lsnget}
 	lsn2 := (<-lsnget).Lsn
-	rafts[0].EventCh <- ClientAppendEvent{data: "baz", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "baz", Ack: lsnget}
 	lsn3 := (<-lsnget).Lsn
 
 	for i := 1; i < 3; i++ {
 		commit := <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect_num(t, int(lsn1), int(commit.Lsn()))
-		expect(t, "foo", string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect_num(t, int(lsn1), int(commit.Lsn))
+		expect(t, "foo", string(commit.Data))
 		commit = <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect_num(t, int(lsn2), int(commit.Lsn()))
-		expect(t, "bar", string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect_num(t, int(lsn2), int(commit.Lsn))
+		expect(t, "bar", string(commit.Data))
 		commit = <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect_num(t, int(lsn3), int(commit.Lsn()))
-		expect(t, "baz", string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect_num(t, int(lsn3), int(commit.Lsn))
+		expect(t, "baz", string(commit.Data))
 	}
 }
 
@@ -121,9 +121,9 @@ func testClientAppendDisconnectFail(t *testing.T, rafts []RaftServer) {
 		go rafts[i].Loop()
 	}
 	lsnget := make(chan ClientAppendResponse, 4)
-	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
-	rafts[0].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
-	rafts[0].EventCh <- ClientAppendEvent{data: "baz", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "foo", Ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "bar", Ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "baz", Ack: lsnget}
 	timer := time.NewTimer(time.Duration(1) * time.Second)
 	select {
 	case <-timer.C:
@@ -153,7 +153,7 @@ func testElection(t *testing.T, rafts []RaftServer) {
 	for newleader == 0 {
 		for i := 1; i < 5; i++ {
 			lsnget := make(chan ClientAppendResponse, 1)
-			rafts[i].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
+			rafts[i].EventCh <- ClientAppendEvent{Data: "foo", Ack: lsnget}
 			// If something was queued, then that must be the new leader
 			if (<-lsnget).Queued {
 				if newleader != 0 {
@@ -168,16 +168,16 @@ func testElection(t *testing.T, rafts []RaftServer) {
 	for i := 1; i < 5; i++ {
 		// Should get committed eventually
 		commit := <-rafts[i].CommitCh
-		t.Logf("Found data %v on server %v, with lsn %v\n", commit.Data(), i, commit.Lsn())
-		expect(t, "foo", string(commit.Data()))
+		t.Logf("Found data %v on server %v, with lsn %v\n", commit.Data, i, commit.Lsn)
+		expect(t, "foo", string(commit.Data))
 	}
 
 	// Let's reconnect the old leader and check if it gets the new data
 	rafts[0].EventCh <- ReconnectEvent{}
 	{
 		commit := <-rafts[0].CommitCh
-		t.Logf("Found data %v on server %v, with lsn %v\n", commit.Data(), 0, commit.Lsn())
-		expect(t, "foo", string(commit.Data()))
+		t.Logf("Found data %v on server %v, with lsn %v\n", commit.Data, 0, commit.Lsn)
+		expect(t, "foo", string(commit.Data))
 	}
 	// ... and kill the new leader
 	rafts[newleader].EventCh <- DisconnectEvent{}
@@ -191,7 +191,7 @@ func testElection(t *testing.T, rafts []RaftServer) {
 				continue
 			}
 			lsnget := make(chan ClientAppendResponse, 1)
-			rafts[i].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
+			rafts[i].EventCh <- ClientAppendEvent{Data: "bar", Ack: lsnget}
 			if (<-lsnget).Queued {
 				t.Logf("Successful ClientAppend on %v\n", i)
 				newnewleader = i
@@ -205,8 +205,8 @@ func testElection(t *testing.T, rafts []RaftServer) {
 		}
 		// Check if the new data got committed
 		commit := <-rafts[i].CommitCh
-		t.Logf("Found data %v on server %v, with lsn %v\n", commit.Data(), i, commit.Lsn())
-		expect(t, "bar", string(commit.Data()))
+		t.Logf("Found data %v on server %v, with lsn %v\n", commit.Data, i, commit.Lsn)
+		expect(t, "bar", string(commit.Data))
 	}
 }
 
@@ -291,32 +291,32 @@ func TestClientAppendLazy(t *testing.T) {
 	}
 	// Append three bits of data
 	lsnget := make(chan ClientAppendResponse, 4)
-	rafts[0].EventCh <- ClientAppendEvent{data: "foo", ack: lsnget}
-	rafts[0].EventCh <- ClientAppendEvent{data: "bar", ack: lsnget}
-	rafts[0].EventCh <- ClientAppendEvent{data: "baz", ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "foo", Ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "bar", Ack: lsnget}
+	rafts[0].EventCh <- ClientAppendEvent{Data: "baz", Ack: lsnget}
 
 	data := make([]string, 3)
 	commit := <-rafts[1].CommitCh
-	t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-	data[0] = string(commit.Data())
+	t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+	data[0] = string(commit.Data)
 	commit = <-rafts[1].CommitCh
-	t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-	data[1] = string(commit.Data())
+	t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+	data[1] = string(commit.Data)
 	commit = <-rafts[1].CommitCh
-	t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-	data[2] = string(commit.Data())
+	t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+	data[2] = string(commit.Data)
 	for i := 2; i < 5; i++ {
 		// Check that the data eventually propagated
 		// with the right lsn
 		commit := <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect(t, data[0], string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect(t, data[0], string(commit.Data))
 		commit = <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect(t, data[1], string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect(t, data[1], string(commit.Data))
 		commit = <-rafts[i].CommitCh
-		t.Logf("Found data %v, with lsn %v\n", commit.Data(), commit.Lsn())
-		expect(t, data[2], string(commit.Data()))
+		t.Logf("Found data %v, with lsn %v\n", commit.Data, commit.Lsn)
+		expect(t, data[2], string(commit.Data))
 	}
 }
 

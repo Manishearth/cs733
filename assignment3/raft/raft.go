@@ -2,6 +2,7 @@
 package raft
 
 import (
+	"encoding/gob"
 	"fmt"
 	"log"
 	"math/rand"
@@ -17,33 +18,11 @@ import (
 type Lsn uint64  // Log sequence number, unique for all time.
 type Data string // String for now, we can have more structured data (or byte data) later
 
-// A generic log entry
-type LogEntry interface {
-	Lsn() Lsn
-	Data() Data
-	// Committed() bool
-	Term() uint
-}
-
-// Simple string entry, can be swapped
-// for a better structure if needed
-type StringEntry struct {
-	lsn  Lsn
-	data Data
-	// committed bool
-	term uint
-}
-
-func (e StringEntry) Lsn() Lsn {
-	return e.lsn
-}
-
-func (e StringEntry) Data() Data {
-	return e.data
-}
-
-func (e StringEntry) Term() uint {
-	return e.term
+// A log entry
+type LogEntry struct {
+	Lsn  Lsn
+	Data Data
+	Term uint
 }
 
 // A single Raft instance
@@ -58,6 +37,8 @@ type RaftServer struct {
 	CommitIndex int
 	LastApplied uint
 	N           uint // number of servers
+	Leader      uint // Last known leader
+	Persistence PersistenceHandler
 }
 
 // Interface for specifying a state
@@ -103,6 +84,19 @@ func (c ChanCommunicationHelper) Send(signal Signal, id uint) {
 func (c ChanCommunicationHelper) Setup() {
 }
 
+// Handles Raft persistence. Save() will be called
+// whenever persistent state needs updating
+// Be sure to run blocking IO in a separate goroutine
+type PersistenceHandler interface {
+	Save(raft *RaftServer)
+}
+
+type NoPersistence struct{}
+
+func (p NoPersistence) Save(raft *RaftServer) {
+	// do nothing
+}
+
 // Makes a number of raft servers as a single network
 func MakeRafts(count uint) []RaftServer {
 	rand.Seed(time.Now().UTC().UnixNano())
@@ -127,6 +121,8 @@ func MakeRafts(count uint) []RaftServer {
 			CommitIndex: -1,
 			LastApplied: 0,
 			N:           count,
+			Leader:      0,
+			Persistence: NoPersistence{},
 		}
 	}
 	return servers
@@ -140,7 +136,11 @@ type NetCommunicationHelper struct {
 	Id      uint          // Self id
 	Hosts   []string      // Hostnames of all servers
 	Ports   []uint        // Ports of all servers
-	EventCh chan<- Signal // Handle to parent raft event chan
+	Handler NetRPCHandler // Handle to parent raft event chan
+}
+
+type NetRPCHandler struct {
+	EventCh chan<- Signal
 }
 
 func (c NetCommunicationHelper) Send(signal Signal, id uint) {
@@ -151,12 +151,18 @@ func (c NetCommunicationHelper) Send(signal Signal, id uint) {
 		return
 	}
 	var reply bool
-	client.Call("NetCommunicationHelper.RecvRPC", &signal, &reply)
+	err = client.Call("NetRPCHandler.Recv", &signal, &reply)
+	if err != nil {
+		// The message type wasn't registered or something
+		log.Fatal("RPC internal error ", err)
+	}
+	client.Close()
 	// We don't care about the RPC reply
 }
 
 func (c NetCommunicationHelper) Setup() {
-	rpc.Register(c)
+	Register()
+	rpc.Register(&c.Handler)
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", fmt.Sprintf(":%v", c.Ports[c.Id]))
 	if e != nil {
@@ -167,8 +173,24 @@ func (c NetCommunicationHelper) Setup() {
 	go http.Serve(l, nil)
 }
 
-func (c *NetCommunicationHelper) RecvRPC(arg *Signal, reply *bool) error {
+func (c *NetRPCHandler) Recv(arg *Signal, reply *bool) error {
 	c.EventCh <- *arg
 	*reply = true
 	return nil
+}
+
+func Register() {
+	gob.Register(TimeoutEvent{})
+	gob.Register(ClientAppendEvent{})
+	gob.Register(ClientAppendResponse{})
+	gob.Register(AppendRPCEvent{})
+	gob.Register(AppendRPCResponse{})
+	gob.Register(DebugEvent{})
+	gob.Register(DebugResponse{})
+	gob.Register(VoteRequestEvent{})
+	gob.Register(VoteResponse{})
+	gob.Register(HeartBeatEvent{})
+	gob.Register(DisconnectEvent{})
+	gob.Register(ReconnectEvent{})
+	gob.Register(LogEntry{Lsn: Lsn(0), Data: Data(""), Term: 0})
 }
