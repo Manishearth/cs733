@@ -121,6 +121,7 @@ func (raft *RaftServer) follower() State {
 	timer := time.AfterFunc(time.Duration(500+rand.Intn(100))*time.Millisecond, func() { raft.EventCh <- TimeoutEvent{} })
 Loop:
 	for event := range raft.EventCh {
+		rand.Seed(time.Now().UTC().UnixNano()*int64(raft.N))
 		switch event.(type) {
 		case DebugEvent:
 			event.(DebugEvent).Ack <- DebugResponse{Log: raft.Log, Term: raft.Term, CommitIndex: raft.CommitIndex}
@@ -258,6 +259,7 @@ func (VoteResponse) __signalAssert()   {}
 func (VoteResponse) __responseAssert() {}
 
 func (raft *RaftServer) candidate() State {
+
 	votes := make([]uint, raft.N) // 2 = yes, 1 = no, 0 = not voted
 	votes[raft.Id] = 2            // vote for self
 	lastLogTerm := uint(0)
@@ -274,6 +276,7 @@ func (raft *RaftServer) candidate() State {
 	timer := time.AfterFunc(time.Duration(150+rand.Intn(150))*time.Millisecond, func() { raft.EventCh <- TimeoutEvent{} })
 Loop:
 	for event := range raft.EventCh {
+		rand.Seed(time.Now().UTC().UnixNano()*int64(raft.N))
 		switch event.(type) {
 		case TimeoutEvent:
 			timer.Stop()
@@ -379,6 +382,7 @@ func (raft *RaftServer) leader() State {
 	}()
 
 	for event := range raft.EventCh {
+		rand.Seed(time.Now().UTC().UnixNano()*int64(raft.N))
 		switch event.(type) {
 		case DisconnectEvent:
 			quit <- true
